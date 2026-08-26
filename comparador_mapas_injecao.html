@@ -296,6 +296,21 @@
     </div>
 
     <div class="subgrp">
+      <h3>Faixa de carga média (parcial)</h3>
+      <div class="grid-params">
+        <div class="field">
+          <label>TP % mínimo</label>
+          <input type="number" id="p_loadmin" value="40">
+          <div class="note">estimado — mesma lógica de TP/Pedal do WOT, faixa independente (não se sobrepõe ao limiar de WOT)</div>
+        </div>
+        <div class="field">
+          <label>TP % máximo</label>
+          <input type="number" id="p_loadmax" value="75">
+        </div>
+      </div>
+    </div>
+
+    <div class="subgrp">
       <h3>Peso do escore composto</h3>
       <div class="grid-params">
         <div class="field">
@@ -320,7 +335,6 @@
         <div class="field"><label>Mínimo p/ confiança Média</label><input type="number" id="p_confmed" value="20"></div>
       </div>
     </div>
-    
 
     <div class="row" style="margin-top:18px;">
       <button class="btn" id="btnProcess" disabled>Processar logs</button>
@@ -368,6 +382,35 @@
   </div>
 </section>
 
+<section id="midloadSection" style="display:none;">
+  <div class="card">
+    <h2><span class="idx">04</span> Resultados em carga média (parcial)</h2>
+    <div class="note-box">Mesma metodologia da aba anterior, aplicada à faixa de TP/Pedal definida em "Faixa de carga média (parcial)" (seção 02) — amostras fora do WOT, mas dentro dessa janela de carga parcial. Útil para avaliar a fase de injeção em condições de rua/cruzeiro sob carga, não só em WOT.</div>
+    <div class="tabs">
+      <div class="tab active" data-tab="scoreMid">Escore composto</div>
+      <div class="tab" data-tab="powerMid">Potência estimada</div>
+      <div class="tab" data-tab="lambdaMid">Lambda &amp; trim</div>
+    </div>
+
+    <div class="tabpanel active" id="tab-scoreMid">
+      <div class="note-box">Escore composto por bin de RPM na faixa de carga média, mesma lógica de contração + min-max da aba WOT. Passe o mouse sobre uma célula para ver RPI/AEP bruto vs. contraído.</div>
+      <div class="chart-box"><canvas id="chartScoreMid"></canvas></div>
+      <div class="tablewrap"><table id="tableScoreMid"></table></div>
+    </div>
+
+    <div class="tabpanel" id="tab-powerMid">
+      <div class="note-box">Estimativa de potência na roda em carga parcial. Como a faixa de carga média fica bem abaixo de WOT, espere valores de potência mais baixos e mais dispersos — não compare diretamente com a aba WOT.</div>
+      <div class="chart-box"><canvas id="chartPowerMid"></canvas></div>
+      <div class="tablewrap"><table id="tablePowerMid"></table></div>
+    </div>
+
+    <div class="tabpanel" id="tab-lambdaMid">
+      <div class="note-box">Lambda e trims médios por mapa, restrito à faixa de carga média.</div>
+      <div class="tablewrap"><table id="tableLambdaMid"></table></div>
+    </div>
+  </div>
+</section>
+
 <section id="calibSection" style="display:none;">
   <div class="card">
     <h2><span class="idx">05</span> Calibração contra dinamômetro (Servitec, 12/08)</h2>
@@ -406,7 +449,8 @@
 
 // ---------- state ----------
 let files = []; // {id,name, headers, rows, tag, sessionLabel, hasPowerChannels, usePower, qc, N}
-let aggregated = null; // last processing result
+let aggregated = null; // last processing result (WOT)
+let aggregatedMid = null; // last processing result (carga média / parcial)
 let fileIdSeq = 0;
 
 // Paleta rotativa para clusters/mapas descobertos dinamicamente a partir do nome do arquivo.
@@ -605,6 +649,8 @@ function getParams(){
     etMax: parseFloat(document.getElementById('p_etmax').value),
     etWindow: parseInt(document.getElementById('p_etwindow').value),
     wotThreshold: parseFloat(document.getElementById('p_wot').value),
+    loadMin: parseFloat(document.getElementById('p_loadmin').value),
+    loadMax: parseFloat(document.getElementById('p_loadmax').value),
     binSize: parseFloat(document.getElementById('p_bin').value),
     lambdaTarget: parseFloat(document.getElementById('p_lambdatarget').value),
     lambdaSrc: document.getElementById('p_lambdasrc').value,
@@ -662,22 +708,11 @@ function processFile(rec, params){
   }
 
   const out = [];
-  let wotCount=0, etExcludedCount=0;
+  const outLoad = [];
+  let wotCount=0, etExcludedCount=0, loadCount=0;
   const gAll = 9.80665;
 
-  for(let i=0;i<N;i++){
-    if(etExcluded[i]){ etExcludedCount++; continue; }
-    const tp = num(rows[i], idx.tp);
-    const pedal = num(rows[i], idx.pedal);
-    let isWOT=false;
-    if(!isNaN(tp)) isWOT = tp >= params.wotThreshold;
-    else if(!isNaN(pedal)) isWOT = pedal >= params.wotThreshold;
-    if(!isWOT) continue;
-    wotCount++;
-
-    const rpm = num(rows[i], idx.rpm);
-    if(isNaN(rpm) || rpm<=0) continue;
-
+  function computeSample(i, rpm, tp, pedal){
     const cve = num(rows[i], idx.cve);
     const mapv = num(rows[i], idx.map);
     const lambda = num(rows[i], idx.lambda);
@@ -718,29 +753,47 @@ function processFile(rec, params){
       }
     }
 
-    out.push({
+    return {
       rpm, bin: Math.floor(rpm/params.binSize)*params.binSize,
       gear: num(rows[i], idx.gear),
       cve, map:mapv, lambda, inj, gft, fct, rpi, aep, pHP, torqueNm
-    });
+    };
+  }
+
+  for(let i=0;i<N;i++){
+    if(etExcluded[i]){ etExcludedCount++; continue; }
+    const tp = num(rows[i], idx.tp);
+    const pedal = num(rows[i], idx.pedal);
+    const loadVal = !isNaN(tp) ? tp : pedal;
+
+    const rpm = num(rows[i], idx.rpm);
+    if(isNaN(rpm) || rpm<=0) continue;
+    if(isNaN(loadVal)) continue;
+
+    const isWOT = loadVal >= params.wotThreshold;
+    const isPartial = !isWOT && loadVal >= params.loadMin && loadVal <= params.loadMax;
+
+    if(isWOT){ wotCount++; out.push(computeSample(i, rpm, tp, pedal)); }
+    if(isPartial){ loadCount++; outLoad.push(computeSample(i, rpm, tp, pedal)); }
   }
 
   return {
     fileId:rec.id, fileName:rec.name, tag:rec.tag, N,
-    wotCount, etExcludedCount,
+    wotCount, etExcludedCount, loadCount,
     hasPowerChannels: rec.hasPowerChannels, usePower: rec.usePower,
-    qc: rec.qc, samples: out
+    qc: rec.qc, samples: out, samplesPartial: outLoad
   };
 }
 
 // ---------- aggregation ----------
 function mean(arr){ const v=arr.filter(x=>!isNaN(x)); return v.length? v.reduce((a,b)=>a+b,0)/v.length : NaN; }
 
-function aggregate(fileResults, params){
+function aggregate(fileResults, params, sampleKey){
+  sampleKey = sampleKey || 'samples';
   const byTag = {};
   fileResults.forEach(fr=>{
     if(!byTag[fr.tag]) byTag[fr.tag] = [];
-    byTag[fr.tag] = byTag[fr.tag].concat(fr.samples.map(s=>Object.assign({fileId:fr.fileId, usePower:fr.usePower}, s)));
+    byTag[fr.tag] = byTag[fr.tag].concat(fr[sampleKey].map(s=>Object.assign({fileId:fr.fileId, usePower:fr.usePower}, s)));
   });
   const tags = Object.keys(byTag);
 
@@ -822,11 +875,16 @@ document.getElementById('btnProcess').addEventListener('click', ()=>{
   setTimeout(()=>{ // let UI paint
     const params = getParams();
     const fileResults = files.map(rec=>processFile(rec, params));
-    aggregated = aggregate(fileResults, params);
+    aggregated = aggregate(fileResults, params, 'samples');
     aggregated._fileResults = fileResults;
     aggregated._params = params;
+    aggregatedMid = aggregate(fileResults, params, 'samplesPartial');
+    aggregatedMid._fileResults = fileResults;
+    aggregatedMid._params = params;
     renderResults();
+    renderMidResults();
     document.getElementById('resultsSection').style.display='block';
+    document.getElementById('midloadSection').style.display='block';
     document.getElementById('calibSection').style.display='block';
     populateCalibTagSelect();
     document.getElementById('statusMsg').textContent = 'concluído';
@@ -834,39 +892,67 @@ document.getElementById('btnProcess').addEventListener('click', ()=>{
 });
 
 document.getElementById('btnReset').addEventListener('click', ()=>{
-  files = []; aggregated = null;
+  files = []; aggregated = null; aggregatedMid = null;
   renderFileTable();
   document.getElementById('resultsSection').style.display='none';
+  document.getElementById('midloadSection').style.display='none';
   document.getElementById('calibSection').style.display='none';
   document.getElementById('btnProcess').disabled = true;
   document.getElementById('statusMsg').textContent = '';
 });
 
-// ---------- tabs ----------
-document.querySelectorAll('.tab').forEach(tab=>{
-  tab.addEventListener('click', ()=>{
-    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-    document.querySelectorAll('.tabpanel').forEach(t=>t.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById('tab-'+tab.dataset.tab).classList.add('active');
+// ---------- tabs (escopados por grupo, para suportar múltiplos blocos de abas na página) ----------
+document.querySelectorAll('.tabs').forEach(tabGroup=>{
+  const tabs = Array.from(tabGroup.querySelectorAll('.tab'));
+  const scope = tabGroup.parentElement; // .card que contém esse grupo de abas + seus painéis
+  tabs.forEach(tab=>{
+    tab.addEventListener('click', ()=>{
+      tabs.forEach(t=>t.classList.remove('active'));
+      scope.querySelectorAll(':scope > .tabpanel').forEach(t=>t.classList.remove('active'));
+      tab.classList.add('active');
+      const panel = document.getElementById('tab-'+tab.dataset.tab);
+      if(panel) panel.classList.add('active');
+    });
   });
 });
 
 // ---------- rendering ----------
-let chartScore=null, chartPower=null;
+const charts = {}; // chave: 'Score'/'Power' + sufixo ('' para WOT, 'Mid' para carga média)
 
 function fmt(v, d){ return isNaN(v)||v===undefined||v===null ? '—' : v.toFixed(d===undefined?2:d); }
 
 function renderResults(){
-  const {tags, bins, stat} = aggregated;
+  renderScoreTab(aggregated, '');
+  renderPowerTab(aggregated, '');
+  renderLambdaTab(aggregated, '');
+  renderQCTab(aggregated._fileResults);
+}
 
-  // ---- score chart + table ----
-  const ctxS = document.getElementById('chartScore').getContext('2d');
-  if(chartScore) chartScore.destroy();
-  chartScore = new Chart(ctxS, {
+function renderMidResults(){
+  renderScoreTab(aggregatedMid, 'Mid');
+  renderPowerTab(aggregatedMid, 'Mid');
+  renderLambdaTab(aggregatedMid, 'Mid');
+}
+
+// tag com melhor potência medida no bin, entre os que têm confiança >= Média — usado para
+// sinalizar divergência entre o proxy de escore (RPI/AEP) e a potência cinemática medida.
+function bestPowerTagInBin(stat, tags, b){
+  let best=null, bestVal=-Infinity;
+  tags.forEach(t=>{
+    const s = stat[t][b];
+    if(s.nPower>0 && s.confidencePower!=='Baixa' && s.pHP>bestVal){ bestVal=s.pHP; best=t; }
+  });
+  return best;
+}
+
+function renderScoreTab(agg, suffix){
+  const {tags, bins, stat} = agg;
+  const ctxS = document.getElementById('chartScore'+suffix).getContext('2d');
+  if(charts['Score'+suffix]) charts['Score'+suffix].destroy();
+  charts['Score'+suffix] = new Chart(ctxS, {
     type:'line',
     data:{
-      labels: bins.map(b=>b+'–'+(b+aggregated._params.binSize)),
+      labels: bins.map(b=>b+'–'+(b+agg._params.binSize)),
       datasets: tags.map(t=>({
         label:t,
         data: bins.map(b=>stat[t][b].score),
@@ -883,25 +969,32 @@ function renderResults(){
 
   let hScore = '<thead><tr><th>Bin RPM</th>'+tags.map(t=>`<th style="color:${colorForTag(t)}">${t}</th>`).join('')+'</tr></thead><tbody>';
   bins.forEach(b=>{
+    const bestPow = bestPowerTagInBin(stat, tags, b);
     hScore += `<tr><td>${b}</td>`+ tags.map(t=>{
       const s = stat[t][b];
       const conf = s.confidence==='Alta'?'b-ok':(s.confidence==='Média'?'b-warn':'b-bad');
       const title = `RPI bruto=${fmt(s.rpi,4)} contraído=${fmt(s.rpiShrunk,4)} · AEP bruto=${fmt(s.aep,4)} contraído=${fmt(s.aepShrunk,4)}`;
-      return `<td title="${title}">${fmt(s.score,3)} <span class="badge ${conf}">n=${s.n}</span></td>`;
+      const warn = (t===bestPow && !isNaN(s.score) && s.score<0.35)
+        ? ` <span class="badge b-warn" title="Este mapa tem a melhor potência medida (confiança ≥ Média) neste bin, mas o proxy RPI/AEP penalizou o escore — não descarte só pelo escore.">⚠ potência alta / proxy baixo</span>`
+        : '';
+      return `<td title="${title}">${fmt(s.score,3)} <span class="badge ${conf}">n=${s.n}</span>${warn}</td>`;
     }).join('') + '</tr>';
   });
   hScore += '</tbody>';
-  document.getElementById('tableScore').innerHTML = hScore;
+  document.getElementById('tableScore'+suffix).innerHTML = hScore;
+}
 
-  // ---- power chart + table ----
-  const ctxP = document.getElementById('chartPower').getContext('2d');
-  if(chartPower) chartPower.destroy();
+function renderPowerTab(agg, suffix){
+  const {tags, bins, stat} = agg;
+  const canvas = document.getElementById('chartPower'+suffix);
   const anyPower = tags.some(t=>bins.some(b=>!isNaN(stat[t][b].pHP)));
   if(anyPower){
-    chartPower = new Chart(ctxP, {
+    const ctxP = canvas.getContext('2d');
+    if(charts['Power'+suffix]) charts['Power'+suffix].destroy();
+    charts['Power'+suffix] = new Chart(ctxP, {
       type:'line',
       data:{
-        labels: bins.map(b=>b+'–'+(b+aggregated._params.binSize)),
+        labels: bins.map(b=>b+'–'+(b+agg._params.binSize)),
         datasets: tags.map(t=>({
           label:t,
           data: bins.map(b=>stat[t][b].pHP),
@@ -917,7 +1010,7 @@ function renderResults(){
       }
     });
   } else {
-    document.getElementById('chartPower').parentElement.innerHTML = '<div class="empty">Nenhum arquivo habilitado tem canais de potência utilizáveis.</div>';
+    canvas.parentElement.innerHTML = '<div class="empty">Nenhum arquivo habilitado tem canais de potência utilizáveis nesta faixa.</div>';
   }
 
   let hPow = '<thead><tr><th>Bin RPM</th>'+tags.map(t=>`<th style="color:${colorForTag(t)}">${t}</th>`).join('')+'</tr></thead><tbody>';
@@ -930,15 +1023,14 @@ function renderResults(){
     }).join('') + '</tr>';
   });
   hPow += '</tbody>';
-  document.getElementById('tablePower').innerHTML = hPow;
+  document.getElementById('tablePower'+suffix).innerHTML = hPow;
+}
 
-  // ---- lambda/trim table ----
-  let hLam = '<thead><tr><th>Mapa</th><th>λ médio (WOT)</th><th>Global Fuel Trim médio</th><th>Fuel Comp Total médio</th><th>Injection Timing médio</th><th>Amostras WOT</th></tr></thead><tbody>';
+function renderLambdaTab(agg, suffix){
+  const {tags, bins} = agg;
+  let hLam = '<thead><tr><th>Mapa</th><th>λ médio</th><th>Global Fuel Trim médio</th><th>Fuel Comp Total médio</th><th>Injection Timing médio</th><th>Amostras</th></tr></thead><tbody>';
   tags.forEach(t=>{
-    const all = bins.flatMap(b=>{
-      const rowsInBin = aggregated.byTag[t].filter(s=>s.bin===b);
-      return rowsInBin;
-    });
+    const all = bins.flatMap(b=>agg.byTag[t].filter(s=>s.bin===b));
     hLam += `<tr><td style="color:${colorForTag(t)}">${t}</td>
       <td>${fmt(mean(all.map(s=>s.lambda)),3)}</td>
       <td>${fmt(mean(all.map(s=>s.gft)),2)}</td>
@@ -947,17 +1039,18 @@ function renderResults(){
       <td>${all.length}</td></tr>`;
   });
   hLam += '</tbody>';
-  document.getElementById('tableLambda').innerHTML = hLam;
+  document.getElementById('tableLambda'+suffix).innerHTML = hLam;
+}
 
-  // ---- QC table ----
-  let hQC = '<thead><tr><th>Arquivo</th><th>Mapa</th><th>Linhas</th><th>Excluídas p/ ET</th><th>Amostras WOT válidas</th><th>Potência</th><th>Alertas</th></tr></thead><tbody>';
-  aggregated._fileResults.forEach(fr=>{
+function renderQCTab(fileResults){
+  let hQC = '<thead><tr><th>Arquivo</th><th>Mapa</th><th>Linhas</th><th>Excluídas p/ ET</th><th>Amostras WOT</th><th>Amostras carga média</th><th>Potência</th><th>Alertas</th></tr></thead><tbody>';
+  fileResults.forEach(fr=>{
     const powerStatus = fr.hasPowerChannels
       ? (fr.usePower ? '<span class="badge b-ok">habilitada</span>' : '<span class="badge b-warn">desabilitada</span>')
       : '<span class="badge b-bad">sem canais</span>';
     hQC += `<tr><td>${fr.fileName}</td><td style="color:${colorForTag(fr.tag)}">${fr.tag}</td>
       <td>${fr.N}</td><td>${fr.etExcludedCount} (${fmt(100*fr.etExcludedCount/fr.N,1)}%)</td>
-      <td>${fr.wotCount}</td><td>${powerStatus}</td>
+      <td>${fr.wotCount}</td><td>${fr.loadCount}</td><td>${powerStatus}</td>
       <td>${fr.qc.flags.length? fr.qc.flags.join('; '):'—'}</td></tr>`;
   });
   hQC += '</tbody>';
@@ -967,15 +1060,21 @@ function renderResults(){
 // ---------- export ----------
 document.getElementById('btnExportCsv').addEventListener('click', ()=>{
   if(!aggregated) return;
-  const {tags, bins, stat} = aggregated;
-  let csv = 'bin_rpm,mapa,n,escore,rpi_bruto,rpi_contraido,aep_bruto,aep_contraido,n_power,potencia_whp,torque_nm,lambda_medio,gft_medio,fct_medio,inj_medio,confianca,confianca_potencia\n';
-  bins.forEach(b=>{
-    tags.forEach(t=>{
-      const s = stat[t][b];
-      csv += [b, t, s.n, s.score, s.rpi, s.rpiShrunk, s.aep, s.aepShrunk, s.nPower, s.pHP, s.torqueNm, s.lambda, s.gft, s.fct, s.inj, s.confidence, s.confidencePower]
-        .map(v=>v===undefined||v===null||(typeof v==='number'&&isNaN(v))?'':v).join(',')+'\n';
+  const header = 'regime,bin_rpm,mapa,n,escore,rpi_bruto,rpi_contraido,aep_bruto,aep_contraido,n_power,potencia_whp,torque_nm,lambda_medio,gft_medio,fct_medio,inj_medio,confianca,confianca_potencia\n';
+  function dump(agg, regime){
+    const {tags, bins, stat} = agg;
+    let out = '';
+    bins.forEach(b=>{
+      tags.forEach(t=>{
+        const s = stat[t][b];
+        out += [regime, b, t, s.n, s.score, s.rpi, s.rpiShrunk, s.aep, s.aepShrunk, s.nPower, s.pHP, s.torqueNm, s.lambda, s.gft, s.fct, s.inj, s.confidence, s.confidencePower]
+          .map(v=>v===undefined||v===null||(typeof v==='number'&&isNaN(v))?'':v).join(',')+'\n';
+      });
     });
-  });
+    return out;
+  }
+  let csv = header + dump(aggregated, 'wot');
+  if(aggregatedMid) csv += dump(aggregatedMid, 'carga_media');
   downloadText(csv, 'comparativo_mapas_injecao.csv', 'text/csv');
 });
 
@@ -984,12 +1083,12 @@ document.getElementById('btnExportJson').addEventListener('click', ()=>{
   const payload = {
     params: aggregated._params,
     fileResults: aggregated._fileResults.map(fr=>({
-      fileName:fr.fileName, tag:fr.tag, N:fr.N, wotCount:fr.wotCount,
+      fileName:fr.fileName, tag:fr.tag, N:fr.N, wotCount:fr.wotCount, loadCount:fr.loadCount,
       etExcludedCount:fr.etExcludedCount, hasPowerChannels:fr.hasPowerChannels,
       usePower:fr.usePower, qc:fr.qc
     })),
-    bins: aggregated.bins,
-    stat: aggregated.stat
+    wot: { bins: aggregated.bins, stat: aggregated.stat },
+    cargaMedia: aggregatedMid ? { bins: aggregatedMid.bins, stat: aggregatedMid.stat } : null
   };
   downloadText(JSON.stringify(payload, null, 2), 'comparativo_mapas_injecao.json', 'application/json');
 });
