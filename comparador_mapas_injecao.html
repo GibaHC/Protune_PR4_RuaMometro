@@ -1,0 +1,1148 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Comparador de Mapas de Injeção — 206 Rallye</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#12151a;
+    --surface:#1a1f27;
+    --surface2:#222933;
+    --surface3:#2a323d;
+    --line:#323b47;
+    --text:#e6eaf0;
+    --dim:#8b96a5;
+    --dimmer:#5b6472;
+    --amber:#ff7a1a;
+    --amber-dim:#8a4a1e;
+    --cyan:#35c9c1;
+    --violet:#9d7bff;
+    --red:#ef4444;
+    --green:#4ade80;
+    --mono: "SFMono-Regular", "JetBrains Mono", Consolas, Menlo, monospace;
+    --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text); font-family:var(--ui);
+    -webkit-font-smoothing:antialiased;
+  }
+  .hazard{
+    height:4px; width:100%;
+    background:repeating-linear-gradient(135deg, var(--amber) 0 10px, #1a1f27 10px 20px);
+    opacity:.55;
+  }
+  header{
+    padding:22px 28px 16px;
+    border-bottom:1px solid var(--line);
+    display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:8px;
+  }
+  header h1{
+    font-size:18px; margin:0; letter-spacing:.2px; font-weight:650;
+  }
+  header .sub{
+    font-family:var(--mono); font-size:11.5px; color:var(--dim);
+  }
+  .wrap{ max-width:1180px; margin:0 auto; padding:0 20px 60px; }
+  section{ margin-top:26px; }
+  .card{
+    background:var(--surface); border:1px solid var(--line); border-radius:10px;
+    padding:18px 20px;
+  }
+  h2{
+    font-size:12.5px; text-transform:uppercase; letter-spacing:1.2px; color:var(--dim);
+    margin:0 0 14px; font-weight:650; display:flex; align-items:center; gap:8px;
+  }
+  h2 .idx{ color:var(--amber); font-family:var(--mono); }
+  .drop{
+    border:1.5px dashed var(--line); border-radius:10px; padding:26px; text-align:center;
+    color:var(--dim); font-size:13px; cursor:pointer; transition:.15s;
+  }
+  .drop.drag{ border-color:var(--amber); color:var(--amber); background:#1f1712; }
+  .drop b{ color:var(--text); }
+  input[type=file]{ display:none; }
+  table{ width:100%; border-collapse:collapse; font-size:12.5px; }
+  th{
+    text-align:left; font-weight:600; color:var(--dim); font-size:10.5px;
+    text-transform:uppercase; letter-spacing:.6px; padding:7px 10px; border-bottom:1px solid var(--line);
+    white-space:nowrap;
+  }
+  td{ padding:7px 10px; border-bottom:1px solid #1f252d; font-family:var(--mono); white-space:nowrap; }
+  tr:hover td{ background:#1e242c; }
+  .filetable select, .filetable input[type=text]{
+    background:var(--surface2); border:1px solid var(--line); color:var(--text);
+    border-radius:6px; padding:4px 8px; font-family:var(--mono); font-size:12px;
+  }
+  .tag-base{ color:var(--cyan); }
+  .tag-soma_40{ color:var(--amber); }
+  .tag-tira_40{ color:var(--violet); }
+  .tag-soma_20{ color:#ffb35c; }
+  .tag-tira_20{ color:#c3a6ff; }
+  .tag-custom{ color:var(--dim); }
+  .badge{
+    display:inline-block; padding:1px 7px; border-radius:20px; font-size:10.5px; font-family:var(--mono);
+  }
+  .b-ok{ background:#123024; color:var(--green); }
+  .b-warn{ background:#332714; color:#ffcc66; }
+  .b-bad{ background:#331a1a; color:var(--red); }
+  .grid-params{
+    display:grid; grid-template-columns:repeat(auto-fill, minmax(220px,1fr)); gap:14px 20px;
+  }
+  .field label{
+    display:block; font-size:11px; color:var(--dim); margin-bottom:4px;
+  }
+  .field .note{ font-size:10px; color:var(--dimmer); margin-top:3px; line-height:1.4; }
+  .field input, .field select{
+    width:100%; background:var(--surface2); border:1px solid var(--line); color:var(--text);
+    border-radius:6px; padding:7px 9px; font-family:var(--mono); font-size:12.5px;
+  }
+  .field input:focus, .field select:focus{ outline:1px solid var(--amber); border-color:var(--amber); }
+  .subgrp{
+    border-top:1px solid var(--line); margin-top:16px; padding-top:14px;
+  }
+  .subgrp h3{
+    font-size:11px; color:var(--amber); text-transform:uppercase; letter-spacing:.8px; margin:0 0 10px;
+  }
+  .btn{
+    background:var(--amber); color:#1a1206; border:none; border-radius:7px; padding:10px 18px;
+    font-weight:650; font-size:13px; cursor:pointer; font-family:var(--ui);
+  }
+  .btn:hover{ background:#ff8b39; }
+  .btn.secondary{
+    background:var(--surface2); color:var(--text); border:1px solid var(--line);
+  }
+  .btn.secondary:hover{ border-color:var(--dim); }
+  .btn:disabled{ opacity:.4; cursor:not-allowed; }
+  .row{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .tabs{ display:flex; gap:2px; margin-bottom:14px; border-bottom:1px solid var(--line); }
+  .tab{
+    padding:8px 14px; font-size:12.5px; color:var(--dim); cursor:pointer; border-bottom:2px solid transparent;
+  }
+  .tab.active{ color:var(--text); border-bottom-color:var(--amber); }
+  .tabpanel{ display:none; }
+  .tabpanel.active{ display:block; }
+  .chart-box{ position:relative; height:340px; margin-bottom:18px; }
+  .note-box{
+    background:var(--surface2); border-left:3px solid var(--amber); border-radius:4px;
+    padding:10px 14px; font-size:12px; color:var(--dim); line-height:1.5; margin-bottom:14px;
+  }
+  .empty{ color:var(--dimmer); font-size:12.5px; padding:20px 0; text-align:center; }
+  .flag{ font-size:10.5px; padding:1px 6px; border-radius:4px; margin-right:4px; display:inline-block; margin-bottom:2px; }
+  .flag-power{ background:#132a1e; color:var(--green); }
+  .flag-nopower{ background:#2a1414; color:var(--red); }
+  .flag-qc{ background:#332714; color:#ffcc66; }
+  footer{ text-align:center; color:var(--dimmer); font-size:11px; padding:30px 0 10px; font-family:var(--mono); }
+  ::-webkit-scrollbar{ height:8px; width:8px; }
+  ::-webkit-scrollbar-thumb{ background:var(--line); border-radius:4px; }
+  .tablewrap{ overflow-x:auto; }
+  .slider-row{ display:flex; align-items:center; gap:10px; }
+  .slider-row input[type=range]{ flex:1; accent-color:var(--amber); }
+  .slider-val{ font-family:var(--mono); font-size:12px; width:38px; text-align:right; color:var(--amber); }
+  .calib-result{ font-family:var(--mono); font-size:12.5px; line-height:1.9; }
+  .calib-result .hl{ color:var(--amber); font-weight:700; }
+  a.dl{ color:var(--cyan); text-decoration:none; font-size:12px; }
+  a.dl:hover{ text-decoration:underline; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Comparador de Mapas de Injeção</h1>
+    <div class="sub">206 Rallye · EC5JP4 · PR-4 &nbsp;/&nbsp; processamento 100% local no navegador</div>
+  </div>
+  <div class="sub" id="fileCountLabel">0 arquivos carregados</div>
+</header>
+<div class="hazard"></div>
+
+<div class="wrap">
+
+<section>
+  <div class="card">
+    <h2><span class="idx">01</span> Carregar logs (CSV)</h2>
+    <div class="drop" id="dropZone">
+      Arraste os arquivos CSV aqui, ou <b>clique para selecionar</b>.<br>
+      <span style="font-size:11px">A classificação de mapa (base / soma_40 / tira_40 / etc.) é sugerida pelo nome do arquivo — confira e corrija na tabela abaixo se necessário.</span>
+    </div>
+    <input type="file" id="fileInput" accept=".csv" multiple>
+    <div class="tablewrap" style="margin-top:16px;">
+      <table class="filetable" id="fileTable" style="display:none;">
+        <thead><tr>
+          <th>Arquivo</th><th>Sessão</th><th>Mapa</th><th>Linhas</th>
+          <th>Canais potência</th><th>Alertas QC</th><th>Usar p/ potência</th><th></th>
+        </tr></thead>
+        <tbody id="fileTableBody"></tbody>
+      </table>
+    </div>
+    <div id="noFiles" class="empty">Nenhum arquivo carregado ainda.</div>
+  </div>
+</section>
+
+<section>
+  <div class="card">
+    <h2><span class="idx">02</span> Parâmetros de cálculo</h2>
+    <div class="note-box">
+      Valores pré-carregados a partir da ficha do veículo e da calibração de dinamômetro (12/08). Tudo é editável — nada aqui é imposto pela ferramenta, só sugerido como ponto de partida. Campos marcados <i>estimado</i> não vieram de medição direta.
+    </div>
+
+    <div class="subgrp" style="border-top:none; margin-top:0; padding-top:0;">
+      <h3>Massa &amp; aerodinâmica</h3>
+      <div class="grid-params">
+        <div class="field">
+          <label>Massa efetiva de cálculo (kg)</label>
+          <input type="number" id="p_mass" value="1120.5" step="0.5">
+          <div class="note">rua + piloto (88kg) + combustível, conforme doc. de calibração</div>
+        </div>
+        <div class="field">
+          <label>Fator de inércia rotativa</label>
+          <input type="number" id="p_inertia" value="1.12" step="0.01">
+          <div class="note">calibrado contra o dyno (12/08, motor novo) — ver seção 05</div>
+        </div>
+        <div class="field">
+          <label>Cx·A — arrasto (m²)</label>
+          <input type="number" id="p_cda" value="0.80" step="0.01">
+          <div class="note">calibrado contra o dyno (12/08, motor novo) — ver seção 05</div>
+        </div>
+        <div class="field">
+          <label>Crr — rolamento</label>
+          <input type="number" id="p_crr" value="0.015" step="0.001">
+          <div class="note">estimado — impacto pequeno no resultado</div>
+        </div>
+        <div class="field">
+          <label>Densidade do ar ρ (kg/m³)</label>
+          <input type="number" id="p_rho" value="1.112" step="0.001">
+          <div class="note">Brasília ~1000m, referência fixa</div>
+        </div>
+        <div class="field">
+          <label>Unidade de "Acceleration" no log</label>
+          <select id="p_accelunit">
+            <option value="ms2">m/s²</option>
+            <option value="g" selected>g (9.80665 m/s²)</option>
+          </select>
+          <div class="note">confirmado — canal do log está em g</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="subgrp">
+      <h3>Pneu &amp; transmissão</h3>
+      <div class="grid-params">
+        <div class="field">
+          <label>Raio do pneu (m)</label>
+          <input type="number" id="p_tire" value="0.2978" step="0.0001">
+        </div>
+        <div class="field">
+          <label>Relação diferencial</label>
+          <input type="number" id="p_diff" value="3.765" step="0.001">
+          <div class="note">17/64 de ficha — usada só quando a velocidade precisa ser derivada de RPM+marcha (sem GPS Speed válido)</div>
+        </div>
+        <div class="field">
+          <label>Marcha 1ª</label>
+          <input type="number" id="p_g1" value="3.417" step="0.001">
+        </div>
+        <div class="field">
+          <label>Marcha 2ª</label>
+          <input type="number" id="p_g2" value="1.810" step="0.001">
+        </div>
+        <div class="field">
+          <label>Marcha 3ª</label>
+          <input type="number" id="p_g3" value="1.270" step="0.001">
+        </div>
+        <div class="field">
+          <label>Marcha 4ª</label>
+          <input type="number" id="p_g4" value="0.975" step="0.001">
+        </div>
+        <div class="field">
+          <label>Marcha 5ª</label>
+          <input type="number" id="p_g5" value="0.767" step="0.001">
+        </div>
+      </div>
+    </div>
+
+    <div class="subgrp">
+      <h3>Filtro de anomalia de ET</h3>
+      <div class="grid-params">
+        <div class="field"><label>ΔET máx por amostra (°C)</label><input type="number" id="p_etdelta" value="10"></div>
+        <div class="field"><label>ET mínimo válido (°C)</label><input type="number" id="p_etmin" value="60"></div>
+        <div class="field"><label>ET máximo válido (°C)</label><input type="number" id="p_etmax" value="105"></div>
+        <div class="field"><label>Janela de expansão (amostras)</label><input type="number" id="p_etwindow" value="150"></div>
+      </div>
+    </div>
+
+    <div class="subgrp">
+      <h3>Isolamento WOT &amp; binagem</h3>
+      <div class="grid-params">
+        <div class="field">
+          <label>Limiar de WOT (TP % ou Pedal %)</label>
+          <input type="number" id="p_wot" value="95">
+          <div class="note">estimado — usa TP TP1L; cai para Pedal PP1 se TP ausente</div>
+        </div>
+        <div class="field"><label>Tamanho do bin de RPM</label><input type="number" id="p_bin" value="500"></div>
+        <div class="field">
+          <label>Lambda alvo (λ_target)</label>
+          <input type="number" id="p_lambdatarget" value="0.84" step="0.01">
+        </div>
+        <div class="field">
+          <label>Fonte do λ_target</label>
+          <select id="p_lambdasrc">
+            <option value="fixed">Valor fixo acima</option>
+            <option value="log" selected>Canal "Lambda Target" do log</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="subgrp">
+      <h3>Peso do escore composto</h3>
+      <div class="grid-params">
+        <div class="field">
+          <label>Peso índice de potência relativo (RPI) vs. proxy de atomização (AEP): <span id="wLabel">50/50</span></label>
+          <div class="slider-row">
+            <input type="range" id="p_weight" min="0" max="100" value="50">
+          </div>
+          <div class="note">RPI = CVE×MAP×RPM/1e6 &nbsp;·&nbsp; AEP = CVE/(λ/λ_alvo)</div>
+        </div>
+        <div class="field">
+          <label>Força de contração (shrinkage) — n₀</label>
+          <input type="number" id="p_shrink" value="20" step="1">
+          <div class="note">antes do min-max, cada média de bin é puxada em direção à média geral do bin, com peso n/(n+n₀). Bins com poucas amostras (n baixo) ficam perto do neutro; bins com muitas amostras (n≫n₀) mantêm o valor bruto. Evita que ruído em bins de baixa confiança vire "vitória" de 1.0. n₀=0 desliga a contração (comportamento antigo).</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="subgrp">
+      <h3>Confiança (nº de amostras por bin)</h3>
+      <div class="grid-params">
+        <div class="field"><label>Mínimo p/ confiança Alta</label><input type="number" id="p_confhigh" value="50"></div>
+        <div class="field"><label>Mínimo p/ confiança Média</label><input type="number" id="p_confmed" value="20"></div>
+      </div>
+    </div>
+    
+
+    <div class="row" style="margin-top:18px;">
+      <button class="btn" id="btnProcess" disabled>Processar logs</button>
+      <button class="btn secondary" id="btnReset">Limpar tudo</button>
+      <span class="sub" id="statusMsg"></span>
+    </div>
+  </div>
+</section>
+
+<section id="resultsSection" style="display:none;">
+  <div class="card">
+    <h2><span class="idx">03</span> Resultados comparativos</h2>
+    <div class="tabs">
+      <div class="tab active" data-tab="score">Escore composto</div>
+      <div class="tab" data-tab="power">Potência estimada</div>
+      <div class="tab" data-tab="lambda">Lambda &amp; trim</div>
+      <div class="tab" data-tab="qc">QC por arquivo</div>
+    </div>
+
+    <div class="tabpanel active" id="tab-score">
+      <div class="note-box">Escore composto por bin de RPM, normalizado (min-max) entre mapas dentro de cada bin, após contração estatística (shrinkage, força n₀ configurável) que puxa bins de poucas amostras em direção à média geral do bin. Isso evita que um mapa com poucas amostras num bin vença por ruído — passe o mouse sobre uma célula para ver RPI/AEP bruto vs. contraído.</div>
+      <div class="chart-box"><canvas id="chartScore"></canvas></div>
+      <div class="tablewrap"><table id="tableScore"></table></div>
+    </div>
+
+    <div class="tabpanel" id="tab-power">
+      <div class="note-box">Estimativa de potência na roda (método cinemático F=ma + arrasto + rolamento). Só calculado para arquivos com canais de Aceleração e Marcha válidos e não sinalizados como degenerados. Valores absolutos são ordem de grandeza — a comparação relativa entre mapas é o que importa.</div>
+      <div class="chart-box"><canvas id="chartPower"></canvas></div>
+      <div class="tablewrap"><table id="tablePower"></table></div>
+    </div>
+
+    <div class="tabpanel" id="tab-lambda">
+      <div class="note-box">Visão geral de lambda e trims de combustível por mapa, para sanity-check — não deve variar de forma que sugira problema de malha fechada entre configurações.</div>
+      <div class="tablewrap"><table id="tableLambda"></table></div>
+    </div>
+
+    <div class="tabpanel" id="tab-qc">
+      <div class="tablewrap"><table id="tableQC"></table></div>
+    </div>
+
+    <div class="row" style="margin-top:16px;">
+      <button class="btn secondary" id="btnExportCsv">Exportar tabela (CSV)</button>
+      <button class="btn secondary" id="btnExportJson">Exportar dados completos (JSON)</button>
+    </div>
+  </div>
+</section>
+
+<section id="calibSection" style="display:none;">
+  <div class="card">
+    <h2><span class="idx">05</span> Calibração contra dinamômetro (Servitec, 12/08)</h2>
+    <div class="note-box">
+      Busca em grade para ajustar Cx·A e o fator de inércia até a potência estimada bater com a referência do dyno, na marcha usada no ensaio. Isola automaticamente amostras WOT na marcha informada, dentro do mapa/config escolhido.
+    </div>
+    <div class="grid-params">
+      <div class="field"><label>Mapa/config de referência</label><select id="c_tag"></select></div>
+      <div class="field"><label>Marcha usada no dyno</label><input type="number" id="c_gear" value="3"></div>
+      <div class="field"><label>P_dyno_max (wHP)</label><input type="number" id="c_pdyno" value="105.22" step="0.01"></div>
+      <div class="field"><label>RPM_Pmax</label><input type="number" id="c_rpmP" value="5000"></div>
+      <div class="field"><label>T_dyno_max (kgf·m)</label><input type="number" id="c_tdyno" value="16.22" step="0.01"></div>
+      <div class="field"><label>RPM_Tmax (centro)</label><input type="number" id="c_rpmT" value="3250"></div>
+      <div class="field"><label>Tolerância de RPM (±)</label><input type="number" id="c_rpmtol" value="300"></div>
+      <div class="field"><label>Cx·A: mín / máx / passo</label>
+        <div class="row"><input type="number" id="c_cda_min" value="0.70" step="0.01"><input type="number" id="c_cda_max" value="0.90" step="0.01"><input type="number" id="c_cda_step" value="0.01" step="0.01"></div>
+      </div>
+      <div class="field"><label>Inércia: mín / máx / passo</label>
+        <div class="row"><input type="number" id="c_in_min" value="1.05" step="0.01"><input type="number" id="c_in_max" value="1.15" step="0.01"><input type="number" id="c_in_step" value="0.01" step="0.01"></div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:14px;">
+      <button class="btn" id="btnCalibrate">Rodar calibração</button>
+      <button class="btn secondary" id="btnApplyCalib" disabled>Aplicar melhor resultado aos parâmetros</button>
+    </div>
+    <div id="calibResult" class="calib-result" style="margin-top:14px;"></div>
+  </div>
+</section>
+
+</div>
+
+<footer>processamento local · nenhum dado sai do navegador</footer>
+
+<script>
+(function(){
+
+// ---------- state ----------
+let files = []; // {id,name, headers, rows, tag, sessionLabel, hasPowerChannels, usePower, qc, N}
+let aggregated = null; // last processing result
+let fileIdSeq = 0;
+
+// Paleta rotativa para clusters/mapas descobertos dinamicamente a partir do nome do arquivo.
+// "base"/"vvt" sempre fica ciano (referência); os demais (soma_NN, tira_NN, ou qualquer
+// rótulo novo que apareça no nome do arquivo) recebem cor da paleta na ordem em que aparecem,
+// sem precisar tocar no código para novos testes (soma_60, tira_10, etc.).
+const COLOR_PALETTE = ['#ff7a1a','#9d7bff','#ffb35c','#c3a6ff','#4ade80','#f472b6','#60a5fa','#facc15','#fb7185','#34d399'];
+const _colorAssign = {};
+let _colorIdx = 0;
+function colorForTag(tag){
+  if(tag==='base') return '#35c9c1';
+  if(!_colorAssign[tag]){ _colorAssign[tag] = COLOR_PALETTE[_colorIdx % COLOR_PALETTE.length]; _colorIdx++; }
+  return _colorAssign[tag];
+}
+
+function classify(filename){
+  const f = filename.toLowerCase();
+  // captura qualquer padrão "soma_NN" / "tira_NN" (com ou sem underscore/hífen), presente e futuro
+  const m = f.match(/(soma|tira)[_-]?(\d+)/);
+  if(m) return m[1]+'_'+m[2];
+  if(/vvt|_base_|(^|[^a-z])base([^a-z]|$)/.test(f)) return 'base';
+  return 'custom';
+}
+
+// Extrai a data a partir da convenção de nome de arquivo "LOG_AAAA_MM_DD..." (prefixo LOG_
+// seguido de 4 dígitos de ano). Evita o bug de capturar os 2 últimos dígitos do ano como se
+// fossem o dia. Exibe no padrão brasileiro dd/mm. Também cobre a convenção nova sem prefixo
+// LOG/ano, ex.: "08_18_base_".
+function sessionLabel(filename){
+  let s = filename.replace(/\.[^.]+$/,'');
+  const withYear = s.match(/^LOG_\d{4}_(\d{2})_(\d{2})/i);
+  const withoutYear = s.match(/^(\d{2})_(\d{2})/);
+  const m = withYear || withoutYear;
+  if(!m) return '—';
+  const month = m[1], day = m[2];
+  const rest = s.slice(m[0].length);
+  const suf = rest.match(/^([a-z])(?:_|$)/i);
+  return day+'/'+month+(suf?('_'+suf[1]):'');
+}
+
+// ---------- file loading ----------
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+dropZone.addEventListener('click', ()=>fileInput.click());
+dropZone.addEventListener('dragover', e=>{e.preventDefault(); dropZone.classList.add('drag');});
+dropZone.addEventListener('dragleave', ()=>dropZone.classList.remove('drag'));
+dropZone.addEventListener('drop', e=>{
+  e.preventDefault(); dropZone.classList.remove('drag');
+  handleFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', e=>handleFiles(e.target.files));
+
+function handleFiles(fileList){
+  const arr = Array.from(fileList).filter(f=>/\.csv$/i.test(f.name));
+  arr.forEach(f=>{
+    const reader = new FileReader();
+    reader.onload = ev=>{
+      const parsed = Papa.parse(ev.target.result, {skipEmptyLines:true});
+      const headers = parsed.data[0];
+      const rows = parsed.data.slice(1);
+      const idxAccel = headers.indexOf('Acceleration');
+      const idxGear = headers.indexOf('Analyzer Calculate Gear');
+      const idxRpm = headers.indexOf('Engine Speed');
+      const hasPowerChannels = idxAccel>=0 && idxGear>=0;
+      const qc = runQC(headers, rows, idxAccel, idxGear, idxRpm);
+      const rec = {
+        id: 'f'+(fileIdSeq++), name:f.name, headers, rows,
+        tag: classify(f.name), sessionLabel: sessionLabel(f.name),
+        hasPowerChannels, usePower: hasPowerChannels && !qc.severe,
+        qc, N: rows.length
+      };
+      files.push(rec);
+      renderFileTable();
+      document.getElementById('statusMsg').textContent = '';
+      document.getElementById('btnProcess').disabled = files.length===0;
+    };
+    reader.readAsText(f);
+  });
+}
+
+function runQC(headers, rows, idxAccel, idxGear, idxRpm){
+  const flags = [];
+  let severe=false;
+  if(idxAccel<0 || idxGear<0){
+    flags.push('sem canais de aceleração/marcha');
+    return {flags, severe:false, note:'apenas escore composto (lambda/injeção) disponível'};
+  }
+  // sample flatline check + stuck gear check over a subsample for speed
+  const step = Math.max(1, Math.floor(rows.length/4000));
+  let accVals=[], gearAt1HighRpm=0, highRpmCount=0;
+  for(let i=0;i<rows.length;i+=step){
+    const a = parseFloat(rows[i][idxAccel]);
+    if(!isNaN(a)) accVals.push(a);
+    const rpm = parseFloat(rows[i][idxRpm]);
+    const g = parseFloat(rows[i][idxGear]);
+    if(!isNaN(rpm) && rpm>3000){
+      highRpmCount++;
+      if(g===1) gearAt1HighRpm++;
+    }
+  }
+  if(accVals.length>5){
+    const mean = accVals.reduce((a,b)=>a+b,0)/accVals.length;
+    const variance = accVals.reduce((a,b)=>a+(b-mean)*(b-mean),0)/accVals.length;
+    if(Math.sqrt(variance) < 0.02){ flags.push('aceleração parece achatada (baixa variância)'); severe=true; }
+  }
+  if(highRpmCount>10 && (gearAt1HighRpm/highRpmCount) > 0.8){
+    flags.push('marcha travada em 1 com RPM alto'); severe=true;
+  }
+  return {flags, severe};
+}
+
+function renderFileTable(){
+  const tbl = document.getElementById('fileTable');
+  const body = document.getElementById('fileTableBody');
+  document.getElementById('noFiles').style.display = files.length? 'none':'block';
+  tbl.style.display = files.length? 'table':'none';
+  document.getElementById('fileCountLabel').textContent = files.length + ' arquivo(s) carregado(s)';
+  body.innerHTML = '';
+  // datalist com todos os clusters já vistos (descobertos dinamicamente pelo nome do arquivo,
+  // ou digitados manualmente) — não é uma lista fixa, só uma sugestão de autocompletar.
+  const knownTags = Array.from(new Set(files.map(r=>r.tag).concat(['base'])));
+  let dl = document.getElementById('tagDatalist');
+  if(!dl){
+    dl = document.createElement('datalist');
+    dl.id = 'tagDatalist';
+    document.body.appendChild(dl);
+  }
+  dl.innerHTML = knownTags.map(t=>`<option value="${t}">`).join('');
+
+  files.forEach(rec=>{
+    const tr = document.createElement('tr');
+
+    const qcBadge = rec.qc.flags.length
+      ? rec.qc.flags.map(f=>`<span class="flag flag-qc">${f}</span>`).join('')
+      : '<span class="badge b-ok">ok</span>';
+
+    const powerBadge = rec.hasPowerChannels
+      ? '<span class="flag flag-power">disponível</span>'
+      : '<span class="flag flag-nopower">ausente</span>';
+
+    tr.innerHTML = `
+      <td title="${rec.name}">${rec.name.length>28?rec.name.slice(0,26)+'…':rec.name}</td>
+      <td>${rec.sessionLabel}</td>
+      <td><input type="text" data-id="${rec.id}" class="tagSelect" list="tagDatalist" value="${rec.tag}" style="width:100px;"></td>
+      <td>${rec.N}</td>
+      <td>${powerBadge}</td>
+      <td>${qcBadge}</td>
+      <td><input type="checkbox" data-id="${rec.id}" class="usePowerChk" ${rec.usePower?'checked':''} ${rec.hasPowerChannels?'':'disabled'}></td>
+      <td><button data-id="${rec.id}" class="btn secondary removeBtn" style="padding:4px 10px;font-size:11px;">remover</button></td>
+    `;
+    body.appendChild(tr);
+  });
+
+  document.querySelectorAll('.tagSelect').forEach(sel=>{
+    sel.addEventListener('change', e=>{
+      const rec = files.find(x=>x.id===e.target.dataset.id);
+      rec.tag = e.target.value.trim() || rec.tag;
+      renderFileTable(); // atualiza o datalist com o novo cluster, se for inédito
+    });
+  });
+  document.querySelectorAll('.usePowerChk').forEach(chk=>{
+    chk.addEventListener('change', e=>{
+      const rec = files.find(x=>x.id===e.target.dataset.id);
+      rec.usePower = e.target.checked;
+    });
+  });
+  document.querySelectorAll('.removeBtn').forEach(btn=>{
+    btn.addEventListener('click', e=>{
+      files = files.filter(x=>x.id!==e.target.dataset.id);
+      renderFileTable();
+      document.getElementById('btnProcess').disabled = files.length===0;
+    });
+  });
+}
+
+// ---------- params ----------
+function getParams(){
+  return {
+    mass: parseFloat(document.getElementById('p_mass').value),
+    inertiaFactor: parseFloat(document.getElementById('p_inertia').value),
+    cda: parseFloat(document.getElementById('p_cda').value),
+    crr: parseFloat(document.getElementById('p_crr').value),
+    rho: parseFloat(document.getElementById('p_rho').value),
+    accelUnit: document.getElementById('p_accelunit').value,
+    tireRadius: parseFloat(document.getElementById('p_tire').value),
+    diffRatio: parseFloat(document.getElementById('p_diff').value),
+    gearRatios: [
+      parseFloat(document.getElementById('p_g1').value),
+      parseFloat(document.getElementById('p_g2').value),
+      parseFloat(document.getElementById('p_g3').value),
+      parseFloat(document.getElementById('p_g4').value),
+      parseFloat(document.getElementById('p_g5').value),
+    ],
+    etMaxDelta: parseFloat(document.getElementById('p_etdelta').value),
+    etMin: parseFloat(document.getElementById('p_etmin').value),
+    etMax: parseFloat(document.getElementById('p_etmax').value),
+    etWindow: parseInt(document.getElementById('p_etwindow').value),
+    wotThreshold: parseFloat(document.getElementById('p_wot').value),
+    binSize: parseFloat(document.getElementById('p_bin').value),
+    lambdaTarget: parseFloat(document.getElementById('p_lambdatarget').value),
+    lambdaSrc: document.getElementById('p_lambdasrc').value,
+    confHigh: parseInt(document.getElementById('p_confhigh').value),
+    confMed: parseInt(document.getElementById('p_confmed').value),
+    scoreWeight: parseInt(document.getElementById('p_weight').value)/100,
+    shrinkN0: parseFloat(document.getElementById('p_shrink').value),
+  };
+}
+document.getElementById('p_weight').addEventListener('input', e=>{
+  const v = parseInt(e.target.value);
+  document.getElementById('wLabel').textContent = v+'/'+(100-v);
+});
+
+// ---------- per-file processing ----------
+function num(row, i){ if(i<0) return NaN; const v = parseFloat(row[i]); return v; }
+
+function processFile(rec, params){
+  const headers = rec.headers, rows = rec.rows;
+  const idx = {
+    accel: headers.indexOf('Acceleration'),
+    gear: headers.indexOf('Analyzer Calculate Gear'),
+    et: headers.indexOf('Engine Temperature ET'),
+    cve: headers.indexOf('Corrected VE'),
+    map: headers.indexOf('Manifold Absolute Pressure MAP'),
+    lambda: headers.indexOf('Lambda 1 Value'),
+    lambdaTarget: headers.indexOf('Lambda Target'),
+    tp: headers.indexOf('Throttle Position TP TP1L'),
+    pedal: headers.indexOf('Pedal 1 Position PP1'),
+    gpsSpeed: headers.indexOf('GPS Speed'),
+    rpm: headers.indexOf('Engine Speed'),
+    inj: headers.indexOf('Fuel Injection Timing'),
+    gft: headers.indexOf('Global Fuel Trim'),
+    fct: headers.indexOf('Fuel Comp Total'),
+  };
+  const N = rows.length;
+  const etVals = new Array(N);
+  for(let i=0;i<N;i++) etVals[i] = num(rows[i], idx.et);
+
+  const etBad = new Array(N).fill(false);
+  for(let i=0;i<N;i++){
+    const e = etVals[i];
+    let bad=false;
+    if(isNaN(e)) bad=true;
+    else if(e<params.etMin || e>params.etMax) bad=true;
+    else if(i>0 && !isNaN(etVals[i-1]) && Math.abs(e-etVals[i-1])>params.etMaxDelta) bad=true;
+    etBad[i]=bad;
+  }
+  const etExcluded = etBad.slice();
+  for(let i=0;i<N;i++){
+    if(etBad[i]){
+      const lo=Math.max(0,i-params.etWindow), hi=Math.min(N-1,i+params.etWindow);
+      for(let k=lo;k<=hi;k++) etExcluded[k]=true;
+    }
+  }
+
+  const out = [];
+  let wotCount=0, etExcludedCount=0;
+  const gAll = 9.80665;
+
+  for(let i=0;i<N;i++){
+    if(etExcluded[i]){ etExcludedCount++; continue; }
+    const tp = num(rows[i], idx.tp);
+    const pedal = num(rows[i], idx.pedal);
+    let isWOT=false;
+    if(!isNaN(tp)) isWOT = tp >= params.wotThreshold;
+    else if(!isNaN(pedal)) isWOT = pedal >= params.wotThreshold;
+    if(!isWOT) continue;
+    wotCount++;
+
+    const rpm = num(rows[i], idx.rpm);
+    if(isNaN(rpm) || rpm<=0) continue;
+
+    const cve = num(rows[i], idx.cve);
+    const mapv = num(rows[i], idx.map);
+    const lambda = num(rows[i], idx.lambda);
+    const lambdaTarget = (params.lambdaSrc==='log' && idx.lambdaTarget>=0)
+      ? num(rows[i], idx.lambdaTarget) : params.lambdaTarget;
+    const inj = num(rows[i], idx.inj);
+    const gft = num(rows[i], idx.gft);
+    const fct = num(rows[i], idx.fct);
+
+    let rpi = NaN, aep = NaN;
+    if(!isNaN(cve) && !isNaN(mapv)) rpi = cve*mapv*rpm/1e6;
+    if(!isNaN(cve) && !isNaN(lambda) && lambda>0 && !isNaN(lambdaTarget) && lambdaTarget>0){
+      aep = cve/(lambda/lambdaTarget);
+    }
+
+    let pHP = NaN, torqueNm = NaN;
+    if(rec.hasPowerChannels && rec.usePower){
+      let a = num(rows[i], idx.accel);
+      if(!isNaN(a) && params.accelUnit==='g') a = a*gAll;
+      const gearN = num(rows[i], idx.gear);
+      let v = NaN;
+      if(idx.gpsSpeed>=0){
+        const gs = num(rows[i], idx.gpsSpeed);
+        if(!isNaN(gs) && gs>0) v = gs/3.6;
+      }
+      if((isNaN(v)||v<=0) && gearN>=1 && gearN<=params.gearRatios.length){
+        const gr = params.gearRatios[Math.round(gearN)-1];
+        if(gr>0 && !isNaN(rpm)) v = (rpm/(gr*params.diffRatio))*(2*Math.PI*params.tireRadius)/60;
+      }
+      if(!isNaN(v) && v>0 && !isNaN(a)){
+        const F = params.mass*params.inertiaFactor*a
+                + 0.5*params.rho*params.cda*v*v
+                + params.crr*params.mass*gAll;
+        const pW = F*v;
+        pHP = pW/745.7;
+        const pkW = pW/1000;
+        torqueNm = pkW*9549/rpm;
+      }
+    }
+
+    out.push({
+      rpm, bin: Math.floor(rpm/params.binSize)*params.binSize,
+      gear: num(rows[i], idx.gear),
+      cve, map:mapv, lambda, inj, gft, fct, rpi, aep, pHP, torqueNm
+    });
+  }
+
+  return {
+    fileId:rec.id, fileName:rec.name, tag:rec.tag, N,
+    wotCount, etExcludedCount,
+    hasPowerChannels: rec.hasPowerChannels, usePower: rec.usePower,
+    qc: rec.qc, samples: out
+  };
+}
+
+// ---------- aggregation ----------
+function mean(arr){ const v=arr.filter(x=>!isNaN(x)); return v.length? v.reduce((a,b)=>a+b,0)/v.length : NaN; }
+
+function aggregate(fileResults, params){
+  const byTag = {};
+  fileResults.forEach(fr=>{
+    if(!byTag[fr.tag]) byTag[fr.tag] = [];
+    byTag[fr.tag] = byTag[fr.tag].concat(fr.samples.map(s=>Object.assign({fileId:fr.fileId, usePower:fr.usePower}, s)));
+  });
+  const tags = Object.keys(byTag);
+
+  // bins present across all
+  const binSet = new Set();
+  tags.forEach(t=>byTag[t].forEach(s=>binSet.add(s.bin)));
+  const bins = Array.from(binSet).sort((a,b)=>a-b);
+
+  // per tag per bin stats
+  const stat = {}; // tag -> bin -> {n, rpi, aep, pHP, torqueNm, nPower, lambda, gft, fct, inj}
+  tags.forEach(t=>{
+    stat[t] = {};
+    bins.forEach(b=>{
+      const rowsInBin = byTag[t].filter(s=>s.bin===b);
+      const powerRows = rowsInBin.filter(s=>s.usePower && !isNaN(s.pHP));
+      stat[t][b] = {
+        n: rowsInBin.length,
+        rpi: mean(rowsInBin.map(s=>s.rpi)),
+        aep: mean(rowsInBin.map(s=>s.aep)),
+        lambda: mean(rowsInBin.map(s=>s.lambda)),
+        gft: mean(rowsInBin.map(s=>s.gft)),
+        fct: mean(rowsInBin.map(s=>s.fct)),
+        inj: mean(rowsInBin.map(s=>s.inj)),
+        nPower: powerRows.length,
+        pHP: mean(powerRows.map(s=>s.pHP)),
+        torqueNm: mean(powerRows.map(s=>s.torqueNm)),
+      };
+    });
+  });
+
+  // Contração (shrinkage) + normalização min-max por bin -> escore composto.
+  // Antes de comparar mapas num bin, puxamos a média de cada mapa em direção à média
+  // ponderada geral do bin (peso n/(n+n0)). Isso impede que um mapa com poucas amostras
+  // vença um bin só por ruído estatístico — quanto menor o n, mais perto do neutro.
+  bins.forEach(b=>{
+    const n0 = params.shrinkN0 || 0;
+
+    function shrink(metric){
+      let sumWeighted=0, sumN=0;
+      tags.forEach(t=>{
+        const s = stat[t][b];
+        if(!isNaN(s[metric])){ sumWeighted += s[metric]*s.n; sumN += s.n; }
+      });
+      const pooled = sumN>0 ? sumWeighted/sumN : NaN;
+      tags.forEach(t=>{
+        const s = stat[t][b];
+        if(isNaN(s[metric])){ s[metric+'Shrunk']=NaN; return; }
+        s[metric+'Shrunk'] = (s[metric]*s.n + pooled*n0) / (s.n + n0);
+      });
+    }
+    shrink('rpi');
+    shrink('aep');
+
+    const rpiVals = tags.map(t=>stat[t][b].rpiShrunk).filter(v=>!isNaN(v));
+    const aepVals = tags.map(t=>stat[t][b].aepShrunk).filter(v=>!isNaN(v));
+    const rpiMin=Math.min(...rpiVals), rpiMax=Math.max(...rpiVals);
+    const aepMin=Math.min(...aepVals), aepMax=Math.max(...aepVals);
+    tags.forEach(t=>{
+      const s = stat[t][b];
+      const nRpi = (rpiVals.length && rpiMax>rpiMin && !isNaN(s.rpiShrunk)) ? (s.rpiShrunk-rpiMin)/(rpiMax-rpiMin) : (isNaN(s.rpiShrunk)?NaN:0.5);
+      const nAep = (aepVals.length && aepMax>aepMin && !isNaN(s.aepShrunk)) ? (s.aepShrunk-aepMin)/(aepMax-aepMin) : (isNaN(s.aepShrunk)?NaN:0.5);
+      let score = NaN;
+      if(!isNaN(nRpi) && !isNaN(nAep)) score = params.scoreWeight*nRpi + (1-params.scoreWeight)*nAep;
+      else if(!isNaN(nRpi)) score = nRpi;
+      else if(!isNaN(nAep)) score = nAep;
+      s.score = score;
+      s.confidence = s.n>=params.confHigh ? 'Alta' : (s.n>=params.confMed ? 'Média' : 'Baixa');
+      s.confidencePower = s.nPower>=params.confHigh ? 'Alta' : (s.nPower>=params.confMed ? 'Média' : 'Baixa');
+    });
+  });
+
+  return {tags, bins, stat, byTag};
+}
+
+// ---------- process button ----------
+document.getElementById('btnProcess').addEventListener('click', ()=>{
+  if(!files.length) return;
+  document.getElementById('statusMsg').textContent = 'processando…';
+  setTimeout(()=>{ // let UI paint
+    const params = getParams();
+    const fileResults = files.map(rec=>processFile(rec, params));
+    aggregated = aggregate(fileResults, params);
+    aggregated._fileResults = fileResults;
+    aggregated._params = params;
+    renderResults();
+    document.getElementById('resultsSection').style.display='block';
+    document.getElementById('calibSection').style.display='block';
+    populateCalibTagSelect();
+    document.getElementById('statusMsg').textContent = 'concluído';
+  }, 30);
+});
+
+document.getElementById('btnReset').addEventListener('click', ()=>{
+  files = []; aggregated = null;
+  renderFileTable();
+  document.getElementById('resultsSection').style.display='none';
+  document.getElementById('calibSection').style.display='none';
+  document.getElementById('btnProcess').disabled = true;
+  document.getElementById('statusMsg').textContent = '';
+});
+
+// ---------- tabs ----------
+document.querySelectorAll('.tab').forEach(tab=>{
+  tab.addEventListener('click', ()=>{
+    document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.tabpanel').forEach(t=>t.classList.remove('active'));
+    tab.classList.add('active');
+    document.getElementById('tab-'+tab.dataset.tab).classList.add('active');
+  });
+});
+
+// ---------- rendering ----------
+let chartScore=null, chartPower=null;
+
+function fmt(v, d){ return isNaN(v)||v===undefined||v===null ? '—' : v.toFixed(d===undefined?2:d); }
+
+function renderResults(){
+  const {tags, bins, stat} = aggregated;
+
+  // ---- score chart + table ----
+  const ctxS = document.getElementById('chartScore').getContext('2d');
+  if(chartScore) chartScore.destroy();
+  chartScore = new Chart(ctxS, {
+    type:'line',
+    data:{
+      labels: bins.map(b=>b+'–'+(b+aggregated._params.binSize)),
+      datasets: tags.map(t=>({
+        label:t,
+        data: bins.map(b=>stat[t][b].score),
+        borderColor: colorForTag(t),
+        backgroundColor:'transparent',
+        spanGaps:true, tension:.25, pointRadius:3,
+      }))
+    },
+    options:{ responsive:true, maintainAspectRatio:false,
+      scales:{ y:{ ticks:{color:'#8b96a5'}, grid:{color:'#242933'} }, x:{ ticks:{color:'#8b96a5'}, grid:{color:'#1f242c'} } },
+      plugins:{ legend:{ labels:{color:'#e6eaf0'} } }
+    }
+  });
+
+  let hScore = '<thead><tr><th>Bin RPM</th>'+tags.map(t=>`<th style="color:${colorForTag(t)}">${t}</th>`).join('')+'</tr></thead><tbody>';
+  bins.forEach(b=>{
+    hScore += `<tr><td>${b}</td>`+ tags.map(t=>{
+      const s = stat[t][b];
+      const conf = s.confidence==='Alta'?'b-ok':(s.confidence==='Média'?'b-warn':'b-bad');
+      const title = `RPI bruto=${fmt(s.rpi,4)} contraído=${fmt(s.rpiShrunk,4)} · AEP bruto=${fmt(s.aep,4)} contraído=${fmt(s.aepShrunk,4)}`;
+      return `<td title="${title}">${fmt(s.score,3)} <span class="badge ${conf}">n=${s.n}</span></td>`;
+    }).join('') + '</tr>';
+  });
+  hScore += '</tbody>';
+  document.getElementById('tableScore').innerHTML = hScore;
+
+  // ---- power chart + table ----
+  const ctxP = document.getElementById('chartPower').getContext('2d');
+  if(chartPower) chartPower.destroy();
+  const anyPower = tags.some(t=>bins.some(b=>!isNaN(stat[t][b].pHP)));
+  if(anyPower){
+    chartPower = new Chart(ctxP, {
+      type:'line',
+      data:{
+        labels: bins.map(b=>b+'–'+(b+aggregated._params.binSize)),
+        datasets: tags.map(t=>({
+          label:t,
+          data: bins.map(b=>stat[t][b].pHP),
+          borderColor: colorForTag(t),
+          backgroundColor:'transparent',
+          spanGaps:true, tension:.25, pointRadius:3,
+        }))
+      },
+      options:{ responsive:true, maintainAspectRatio:false,
+        scales:{ y:{ title:{display:true,text:'wHP estimado',color:'#8b96a5'}, ticks:{color:'#8b96a5'}, grid:{color:'#242933'} },
+                 x:{ ticks:{color:'#8b96a5'}, grid:{color:'#1f242c'} } },
+        plugins:{ legend:{ labels:{color:'#e6eaf0'} } }
+      }
+    });
+  } else {
+    document.getElementById('chartPower').parentElement.innerHTML = '<div class="empty">Nenhum arquivo habilitado tem canais de potência utilizáveis.</div>';
+  }
+
+  let hPow = '<thead><tr><th>Bin RPM</th>'+tags.map(t=>`<th style="color:${colorForTag(t)}">${t}</th>`).join('')+'</tr></thead><tbody>';
+  bins.forEach(b=>{
+    hPow += `<tr><td>${b}</td>`+ tags.map(t=>{
+      const s = stat[t][b];
+      if(s.nPower===0) return '<td>—</td>';
+      const conf = s.confidencePower==='Alta'?'b-ok':(s.confidencePower==='Média'?'b-warn':'b-bad');
+      return `<td>${fmt(s.pHP,1)} wHP / ${fmt(s.torqueNm,1)} N·m <span class="badge ${conf}">n=${s.nPower}</span></td>`;
+    }).join('') + '</tr>';
+  });
+  hPow += '</tbody>';
+  document.getElementById('tablePower').innerHTML = hPow;
+
+  // ---- lambda/trim table ----
+  let hLam = '<thead><tr><th>Mapa</th><th>λ médio (WOT)</th><th>Global Fuel Trim médio</th><th>Fuel Comp Total médio</th><th>Injection Timing médio</th><th>Amostras WOT</th></tr></thead><tbody>';
+  tags.forEach(t=>{
+    const all = bins.flatMap(b=>{
+      const rowsInBin = aggregated.byTag[t].filter(s=>s.bin===b);
+      return rowsInBin;
+    });
+    hLam += `<tr><td style="color:${colorForTag(t)}">${t}</td>
+      <td>${fmt(mean(all.map(s=>s.lambda)),3)}</td>
+      <td>${fmt(mean(all.map(s=>s.gft)),2)}</td>
+      <td>${fmt(mean(all.map(s=>s.fct)),2)}</td>
+      <td>${fmt(mean(all.map(s=>s.inj)),1)}</td>
+      <td>${all.length}</td></tr>`;
+  });
+  hLam += '</tbody>';
+  document.getElementById('tableLambda').innerHTML = hLam;
+
+  // ---- QC table ----
+  let hQC = '<thead><tr><th>Arquivo</th><th>Mapa</th><th>Linhas</th><th>Excluídas p/ ET</th><th>Amostras WOT válidas</th><th>Potência</th><th>Alertas</th></tr></thead><tbody>';
+  aggregated._fileResults.forEach(fr=>{
+    const powerStatus = fr.hasPowerChannels
+      ? (fr.usePower ? '<span class="badge b-ok">habilitada</span>' : '<span class="badge b-warn">desabilitada</span>')
+      : '<span class="badge b-bad">sem canais</span>';
+    hQC += `<tr><td>${fr.fileName}</td><td style="color:${colorForTag(fr.tag)}">${fr.tag}</td>
+      <td>${fr.N}</td><td>${fr.etExcludedCount} (${fmt(100*fr.etExcludedCount/fr.N,1)}%)</td>
+      <td>${fr.wotCount}</td><td>${powerStatus}</td>
+      <td>${fr.qc.flags.length? fr.qc.flags.join('; '):'—'}</td></tr>`;
+  });
+  hQC += '</tbody>';
+  document.getElementById('tableQC').innerHTML = hQC;
+}
+
+// ---------- export ----------
+document.getElementById('btnExportCsv').addEventListener('click', ()=>{
+  if(!aggregated) return;
+  const {tags, bins, stat} = aggregated;
+  let csv = 'bin_rpm,mapa,n,escore,rpi_bruto,rpi_contraido,aep_bruto,aep_contraido,n_power,potencia_whp,torque_nm,lambda_medio,gft_medio,fct_medio,inj_medio,confianca,confianca_potencia\n';
+  bins.forEach(b=>{
+    tags.forEach(t=>{
+      const s = stat[t][b];
+      csv += [b, t, s.n, s.score, s.rpi, s.rpiShrunk, s.aep, s.aepShrunk, s.nPower, s.pHP, s.torqueNm, s.lambda, s.gft, s.fct, s.inj, s.confidence, s.confidencePower]
+        .map(v=>v===undefined||v===null||(typeof v==='number'&&isNaN(v))?'':v).join(',')+'\n';
+    });
+  });
+  downloadText(csv, 'comparativo_mapas_injecao.csv', 'text/csv');
+});
+
+document.getElementById('btnExportJson').addEventListener('click', ()=>{
+  if(!aggregated) return;
+  const payload = {
+    params: aggregated._params,
+    fileResults: aggregated._fileResults.map(fr=>({
+      fileName:fr.fileName, tag:fr.tag, N:fr.N, wotCount:fr.wotCount,
+      etExcludedCount:fr.etExcludedCount, hasPowerChannels:fr.hasPowerChannels,
+      usePower:fr.usePower, qc:fr.qc
+    })),
+    bins: aggregated.bins,
+    stat: aggregated.stat
+  };
+  downloadText(JSON.stringify(payload, null, 2), 'comparativo_mapas_injecao.json', 'application/json');
+});
+
+function downloadText(content, filename, mime){
+  const blob = new Blob([content], {type:mime});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ---------- calibration ----------
+function populateCalibTagSelect(){
+  const sel = document.getElementById('c_tag');
+  sel.innerHTML = aggregated.tags.map(t=>`<option value="${t}">${t}</option>`).join('');
+}
+
+document.getElementById('btnCalibrate').addEventListener('click', ()=>{
+  if(!aggregated){ return; }
+  const tag = document.getElementById('c_tag').value;
+  const gearWanted = parseInt(document.getElementById('c_gear').value);
+  const pDyno = parseFloat(document.getElementById('c_pdyno').value);
+  const rpmP = parseFloat(document.getElementById('c_rpmP').value);
+  const tDyno = parseFloat(document.getElementById('c_tdyno').value) * 9.80665; // kgf.m -> N.m
+  const rpmT = parseFloat(document.getElementById('c_rpmT').value);
+  const rpmTol = parseFloat(document.getElementById('c_rpmtol').value);
+  const cdaMin = parseFloat(document.getElementById('c_cda_min').value);
+  const cdaMax = parseFloat(document.getElementById('c_cda_max').value);
+  const cdaStep = parseFloat(document.getElementById('c_cda_step').value);
+  const inMin = parseFloat(document.getElementById('c_in_min').value);
+  const inMax = parseFloat(document.getElementById('c_in_max').value);
+  const inStep = parseFloat(document.getElementById('c_in_step').value);
+
+  const baseParams = getParams();
+
+  // gather raw calibration samples (gear==gearWanted, WOT+ET already filtered, from files of this tag with usePower)
+  const calibSamples = [];
+  aggregated._fileResults.filter(fr=>fr.tag===tag && fr.usePower).forEach(fr=>{
+    fr.samples.forEach(s=>{
+      if(Math.round(s.gear)===gearWanted && (Math.abs(s.rpm-rpmP)<=rpmTol*1.5 || Math.abs(s.rpm-rpmT)<=rpmTol*1.5)){
+        calibSamples.push(s);
+      }
+    });
+  });
+
+  if(!calibSamples.length){
+    document.getElementById('calibResult').innerHTML = '<span style="color:var(--red)">Nenhuma amostra WOT encontrada na marcha '+gearWanted+' para o mapa "'+tag+'" perto de '+rpmP+' ou '+rpmT+' rpm. Verifique se o arquivo tem canal de Marcha confiável nesses trechos.</span>';
+    return;
+  }
+
+  // need raw a and v per sample to recompute F under different cda/inertia -> recompute from scratch using raw file rows would be heavier;
+  // instead, reconstruct v and a approx from stored pHP/torque back out is not reliable, so recompute directly here using stored rpm/gear and re-deriving v via gear ratio + rpm (consistent with main pipeline when GPS speed unused). We approximate a from stored torque/power at baseline params (invert), which is imprecise, so instead re-derive a from original formula requires raw acceleration - re-run processFile-lite over raw rows restricted to calib window.
+
+  let best=null;
+  const results = [];
+  for(let cda=cdaMin; cda<=cdaMax+1e-9; cda+=cdaStep){
+    for(let inertia=inMin; inertia<=inMax+1e-9; inertia+=inStep){
+      const testParams = Object.assign({}, baseParams, {cda:Number(cda.toFixed(4)), inertiaFactor:Number(inertia.toFixed(4))});
+      const recomputed = recomputeCalibSamples(tag, gearWanted, testParams);
+      if(!recomputed.length) continue;
+      const nearP = recomputed.filter(s=>Math.abs(s.rpm-rpmP)<=rpmTol);
+      const nearT = recomputed.filter(s=>Math.abs(s.rpm-rpmT)<=rpmTol);
+      const pEst = mean(nearP.map(s=>s.pHP));
+      const tEst = mean(nearT.map(s=>s.torqueNm));
+      if(isNaN(pEst)) continue;
+      const errP = Math.abs(pEst-pDyno)/pDyno;
+      const errT = isNaN(tEst) ? null : Math.abs(tEst-tDyno)/tDyno;
+      const combinedErr = errT!==null ? (errP+errT)/2 : errP;
+      const rec = {cda:testParams.cda, inertia:testParams.inertiaFactor, pEst, tEst, errP, errT, combinedErr, nP:nearP.length, nT:nearT.length};
+      results.push(rec);
+      if(!best || combinedErr < best.combinedErr) best = rec;
+    }
+  }
+
+  if(!best){
+    document.getElementById('calibResult').innerHTML = '<span style="color:var(--red)">Busca não convergiu — amplie a janela de tolerância de RPM ou verifique os dados de calibração.</span>';
+    return;
+  }
+
+  window._bestCalib = best;
+  document.getElementById('btnApplyCalib').disabled = false;
+  document.getElementById('calibResult').innerHTML = `
+    Melhor ajuste encontrado (de ${results.length} combinações testadas):<br>
+    Cx·A = <span class="hl">${best.cda.toFixed(3)}</span> m² &nbsp;·&nbsp;
+    Fator de inércia = <span class="hl">${best.inertia.toFixed(3)}</span><br>
+    P_estimado(${rpmP}±${rpmTol} rpm) = <span class="hl">${fmt(best.pEst,2)}</span> wHP
+      (referência ${pDyno} wHP, erro ${fmt(best.errP*100,1)}%, n=${best.nP})<br>
+    T_estimado(${rpmT}±${rpmTol} rpm) = <span class="hl">${fmt(best.tEst,1)}</span> N·m
+      (referência ${fmt(tDyno,1)} N·m / ${(tDyno/9.80665).toFixed(2)} kgf·m, erro ${best.errT!==null?fmt(best.errT*100,1)+'%':'—'}, n=${best.nT})<br>
+    ${(best.errP>0.05 || (best.errT!==null && best.errT>0.05)) ?
+      '<span style="color:var(--red)">Erro acima de ±5% mesmo no melhor ponto da grade — considere que o erro residual pode estar em outro lugar (ex.: relação de câmbio, marcha do dyno vs. marcha do log, ou canal de Aceleração em unidade errada), não apenas em Cx·A/inércia.</span>' :
+      '<span style="color:var(--green)">Dentro da tolerância de ±5%.</span>'}
+  `;
+});
+
+function recomputeCalibSamples(tag, gearWanted, params){
+  const out = [];
+  aggregated._fileResults.filter(fr=>fr.tag===tag && fr.usePower).forEach(fr=>{
+    const rec = files.find(f=>f.id===fr.fileId);
+    if(!rec) return;
+    const headers = rec.headers, rows = rec.rows;
+    const idx = {
+      accel: headers.indexOf('Acceleration'),
+      gear: headers.indexOf('Analyzer Calculate Gear'),
+      rpm: headers.indexOf('Engine Speed'),
+      gpsSpeed: headers.indexOf('GPS Speed'),
+      tp: headers.indexOf('Throttle Position TP TP1L'),
+      et: headers.indexOf('Engine Temperature ET'),
+    };
+    const gAll = 9.80665;
+    for(let i=0;i<rows.length;i++){
+      const gearN = num(rows[i], idx.gear);
+      if(Math.round(gearN)!==gearWanted) continue;
+      const tp = num(rows[i], idx.tp);
+      if(isNaN(tp) || tp < params.wotThreshold) continue;
+      const et = num(rows[i], idx.et);
+      if(isNaN(et) || et<params.etMin || et>params.etMax) continue;
+      const rpm = num(rows[i], idx.rpm);
+      if(isNaN(rpm) || rpm<=0) continue;
+      let a = num(rows[i], idx.accel);
+      if(isNaN(a)) continue;
+      if(params.accelUnit==='g') a = a*gAll;
+      let v = NaN;
+      if(idx.gpsSpeed>=0){
+        const gs = num(rows[i], idx.gpsSpeed);
+        if(!isNaN(gs) && gs>0) v = gs/3.6;
+      }
+      if((isNaN(v)||v<=0)){
+        const gr = params.gearRatios[gearWanted-1];
+        if(gr>0) v = (rpm/(gr*params.diffRatio))*(2*Math.PI*params.tireRadius)/60;
+      }
+      if(isNaN(v) || v<=0) continue;
+      const F = params.mass*params.inertiaFactor*a + 0.5*params.rho*params.cda*v*v + params.crr*params.mass*gAll;
+      const pW = F*v;
+      const pHP = pW/745.7;
+      const pkW = pW/1000;
+      const torqueNm = pkW*9549/rpm;
+      out.push({rpm, pHP, torqueNm});
+    }
+  });
+  return out;
+}
+
+document.getElementById('btnApplyCalib').addEventListener('click', ()=>{
+  const b = window._bestCalib;
+  if(!b) return;
+  document.getElementById('p_cda').value = b.cda.toFixed(3);
+  document.getElementById('p_inertia').value = b.inertia.toFixed(3);
+  document.getElementById('statusMsg').textContent = 'parâmetros de calibração aplicados — reprocesse os logs';
+});
+
+})();
+</script>
+</body>
+</html>
