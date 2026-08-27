@@ -385,6 +385,21 @@
           <input type="number" id="p_accelminmid" value="-0.01" step="0.01">
           <div class="note">permite leve desaceleração em cruzeiro, mas corta eventos de frenagem mais fortes</div>
         </div>
+        <div class="field">
+          <label>Aceleração máxima plausível (g)</label>
+          <input type="number" id="p_accelmax" value="1.0" step="0.05">
+          <div class="note">acima disso é choque de embreagem/trem de força na troca de marcha ou ruído de sensor, não aceleração real sustentada do veículo — aplicado nos dois regimes</div>
+        </div>
+        <div class="field">
+          <label>Salto máximo de GPS Speed por amostra (km/h)</label>
+          <input type="number" id="p_speedjump" value="15" step="1">
+          <div class="note">detecta glitch de reaquisição de GPS (fix volta a "válido" antes da solução de velocidade estabilizar) — Fix Status sozinho não pega esse caso</div>
+        </div>
+        <div class="field">
+          <label>Janela de expansão do salto de GPS (amostras)</label>
+          <input type="number" id="p_speedjumpwindow" value="5">
+          <div class="note">amostras vizinhas ao salto também descartadas, enquanto a solução de velocidade ainda está assentando</div>
+        </div>
       </div>
     </div>
 
@@ -817,6 +832,9 @@ function getParams(){
     speedMinKmh: parseFloat(document.getElementById('p_speedmin').value),
     accelMinWot: parseFloat(document.getElementById('p_accelminwot').value),
     accelMinMid: parseFloat(document.getElementById('p_accelminmid').value),
+    accelMax: parseFloat(document.getElementById('p_accelmax').value),
+    speedJumpMaxKmh: parseFloat(document.getElementById('p_speedjump').value),
+    speedJumpWindow: parseInt(document.getElementById('p_speedjumpwindow').value),
     binSize: parseFloat(document.getElementById('p_bin').value),
     lambdaTarget: parseFloat(document.getElementById('p_lambdatarget').value),
     lambdaSrc: document.getElementById('p_lambdasrc').value,
@@ -871,6 +889,27 @@ function processFile(rec, params){
     if(etBad[i]){
       const lo=Math.max(0,i-params.etWindow), hi=Math.min(N-1,i+params.etWindow);
       for(let k=lo;k<=hi;k++) etExcluded[k]=true;
+    }
+  }
+
+  // Despique de GPS Speed: um "fix válido" às vezes volta um pouco antes de a solução de
+  // velocidade estabilizar de verdade após perda de sinal, gerando um salto de velocidade
+  // fisicamente impossível entre amostras consecutivas sem que GPS Fix Status acuse isso.
+  const gpsSpeedExcluded = new Array(N).fill(false);
+  if(idx.gpsSpeed>=0){
+    const gsVals = new Array(N);
+    for(let i=0;i<N;i++) gsVals[i] = num(rows[i], idx.gpsSpeed);
+    const gsBad = new Array(N).fill(false);
+    for(let i=1;i<N;i++){
+      if(!isNaN(gsVals[i]) && !isNaN(gsVals[i-1]) && Math.abs(gsVals[i]-gsVals[i-1])>params.speedJumpMaxKmh){
+        gsBad[i]=true; gsBad[i-1]=true;
+      }
+    }
+    for(let i=0;i<N;i++){
+      if(gsBad[i]){
+        const lo=Math.max(0,i-params.speedJumpWindow), hi=Math.min(N-1,i+params.speedJumpWindow);
+        for(let k=lo;k<=hi;k++) gpsSpeedExcluded[k]=true;
+      }
     }
   }
 
@@ -948,6 +987,9 @@ function processFile(rec, params){
       if(!isNaN(gs) && gs < params.speedMinKmh) continue;
     }
 
+    // despique de salto de GPS Speed (glitch de reaquisição não pego pelo GPS Fix Status)
+    if(gpsSpeedExcluded[i]) continue;
+
     const tp = num(rows[i], idx.tp);
     const pedal = num(rows[i], idx.pedal);
     const loadVal = !isNaN(tp) ? tp : pedal;
@@ -960,13 +1002,15 @@ function processFile(rec, params){
     const isPartial = !isWOT && loadVal >= params.loadMin && loadVal <= params.loadMax;
     if(!isWOT && !isPartial) continue;
 
-    // aceleração mínima (limiar diferente por regime), convertida para g independente da unidade do log
+    // aceleração mínima (limiar diferente por regime) e máxima plausível (ambos os regimes),
+    // convertidas para g independente da unidade do log
     if(idx.accel>=0){
       let ag = num(rows[i], idx.accel);
       if(!isNaN(ag)){
         if(params.accelUnit==='ms2') ag = ag/gAll;
         const minAccel = isWOT ? params.accelMinWot : params.accelMinMid;
         if(ag < minAccel) continue;
+        if(ag > params.accelMax) continue;
       }
     }
 
@@ -1411,6 +1455,26 @@ function recomputeCalibSamples(tag, gearWanted, params){
       et: headers.indexOf('Engine Temperature ET'),
     };
     const gAll = 9.80665;
+
+    // despique de salto de GPS Speed, mesma lógica do pipeline principal
+    const gsExcluded = new Array(rows.length).fill(false);
+    if(idx.gpsSpeed>=0){
+      const gsVals = new Array(rows.length);
+      for(let i=0;i<rows.length;i++) gsVals[i] = num(rows[i], idx.gpsSpeed);
+      const gsBad = new Array(rows.length).fill(false);
+      for(let i=1;i<rows.length;i++){
+        if(!isNaN(gsVals[i]) && !isNaN(gsVals[i-1]) && Math.abs(gsVals[i]-gsVals[i-1])>params.speedJumpMaxKmh){
+          gsBad[i]=true; gsBad[i-1]=true;
+        }
+      }
+      for(let i=0;i<rows.length;i++){
+        if(gsBad[i]){
+          const lo=Math.max(0,i-params.speedJumpWindow), hi=Math.min(rows.length-1,i+params.speedJumpWindow);
+          for(let k=lo;k<=hi;k++) gsExcluded[k]=true;
+        }
+      }
+    }
+
     for(let i=0;i<rows.length;i++){
       const gearN = num(rows[i], idx.gear);
       if(Math.round(gearN)!==gearWanted) continue;
@@ -1422,6 +1486,7 @@ function recomputeCalibSamples(tag, gearWanted, params){
         const fix = num(rows[i], idx.gpsFix);
         if(!isNaN(fix) && fix===0) continue;
       }
+      if(gsExcluded[i]) continue;
       const rpm = num(rows[i], idx.rpm);
       if(isNaN(rpm) || rpm<=0) continue;
       let a = num(rows[i], idx.accel);
@@ -1429,6 +1494,7 @@ function recomputeCalibSamples(tag, gearWanted, params){
       if(params.accelUnit==='g') a = a*gAll;
       let ag = a/gAll; // normaliza de volta para g, independente da unidade original do log
       if(ag < params.accelMinWot) continue;
+      if(ag > params.accelMax) continue;
       let v = NaN;
       if(idx.gpsSpeed>=0){
         const gs = num(rows[i], idx.gpsSpeed);
