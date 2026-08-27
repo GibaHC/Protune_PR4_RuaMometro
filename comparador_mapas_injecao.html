@@ -314,10 +314,10 @@
     <div class="subgrp">
       <h3>Filtro de anomalia de ET</h3>
       <div class="grid-params">
-        <div class="field"><label>ΔET máx por amostra (°C)</label><input type="number" id="p_etdelta" value="10"></div>
-        <div class="field"><label>ET mínimo válido (°C)</label><input type="number" id="p_etmin" value="60"></div>
+        <div class="field"><label>ΔET máx por amostra (°C)</label><input type="number" id="p_etdelta" value="4"></div>
+        <div class="field"><label>ET mínimo válido (°C)</label><input type="number" id="p_etmin" value="15"></div>
         <div class="field"><label>ET máximo válido (°C)</label><input type="number" id="p_etmax" value="105"></div>
-        <div class="field"><label>Janela de expansão (amostras)</label><input type="number" id="p_etwindow" value="150"></div>
+        <div class="field"><label>Janela de expansão (amostras)</label><input type="number" id="p_etwindow" value="51"></div>
       </div>
     </div>
 
@@ -326,7 +326,7 @@
       <div class="grid-params">
         <div class="field">
           <label>Limiar de WOT (TP % ou Pedal %)</label>
-          <input type="number" id="p_wot" value="95">
+          <input type="number" id="p_wot" value="85">
           <div class="note">estimado — usa TP TP1L; cai para Pedal PP1 se TP ausente</div>
         </div>
         <div class="field"><label>Tamanho do bin de RPM</label><input type="number" id="p_bin" value="500"></div>
@@ -355,6 +355,35 @@
         <div class="field">
           <label>TP % máximo</label>
           <input type="number" id="p_loadmax" value="75">
+        </div>
+      </div>
+    </div>
+
+    <div class="subgrp">
+      <h3>Filtros de ruído</h3>
+      <div class="grid-params">
+        <div class="field">
+          <label><input type="checkbox" id="p_gearfilter" checked style="width:auto;margin-right:6px;vertical-align:middle;">Excluir amostras de 1ª marcha</label>
+          <div class="note">1ª marcha costuma ter wheelspin/embreagem/trocas rápidas — ruído demais para timing de injeção. Só aplicado quando o canal de Marcha existe no log.</div>
+        </div>
+        <div class="field">
+          <label><input type="checkbox" id="p_gpsfixfilter" checked style="width:auto;margin-right:6px;vertical-align:middle;">Descartar GPS Fix Status = 0</label>
+          <div class="note">perda momentânea de sinal GPS costuma vir com salto de velocidade na reaquisição, gerando aceleração impossível quando a velocidade é derivada do GPS. Só aplicado quando o canal existe.</div>
+        </div>
+        <div class="field">
+          <label>Piso de velocidade mínima — GPS Speed (km/h)</label>
+          <input type="number" id="p_speedmin" value="10" step="0.5">
+          <div class="note">GPS Speed é ruidoso perto de zero; abaixo do piso a amostra é descartada. Só aplicado quando o canal existe.</div>
+        </div>
+        <div class="field">
+          <label>Aceleração mínima em WOT (g)</label>
+          <input type="number" id="p_accelminwot" value="0.02" step="0.01">
+          <div class="note">abaixo disso em WOT, provavelmente não é aceleração real (topo de faixa, ladeira, ruído do sensor)</div>
+        </div>
+        <div class="field">
+          <label>Aceleração mínima em carga parcial (g)</label>
+          <input type="number" id="p_accelminmid" value="-0.01" step="0.01">
+          <div class="note">permite leve desaceleração em cruzeiro, mas corta eventos de frenagem mais fortes</div>
         </div>
       </div>
     </div>
@@ -783,6 +812,11 @@ function getParams(){
     wotThreshold: parseFloat(document.getElementById('p_wot').value),
     loadMin: parseFloat(document.getElementById('p_loadmin').value),
     loadMax: parseFloat(document.getElementById('p_loadmax').value),
+    gearFilter: document.getElementById('p_gearfilter').checked,
+    gpsFixFilter: document.getElementById('p_gpsfixfilter').checked,
+    speedMinKmh: parseFloat(document.getElementById('p_speedmin').value),
+    accelMinWot: parseFloat(document.getElementById('p_accelminwot').value),
+    accelMinMid: parseFloat(document.getElementById('p_accelminmid').value),
     binSize: parseFloat(document.getElementById('p_bin').value),
     lambdaTarget: parseFloat(document.getElementById('p_lambdatarget').value),
     lambdaSrc: document.getElementById('p_lambdasrc').value,
@@ -813,6 +847,7 @@ function processFile(rec, params){
     tp: headers.indexOf('Throttle Position TP TP1L'),
     pedal: headers.indexOf('Pedal 1 Position PP1'),
     gpsSpeed: headers.indexOf('GPS Speed'),
+    gpsFix: headers.indexOf('GPS Fix Status'),
     rpm: headers.indexOf('Engine Speed'),
     inj: headers.indexOf('Fuel Injection Timing'),
     gft: headers.indexOf('Global Fuel Trim'),
@@ -894,6 +929,25 @@ function processFile(rec, params){
 
   for(let i=0;i<N;i++){
     if(etExcluded[i]){ etExcludedCount++; continue; }
+
+    // filtro de marcha: descarta 1ª marcha (só aplicável quando o canal existe)
+    if(params.gearFilter && idx.gear>=0){
+      const gearRaw = num(rows[i], idx.gear);
+      if(!isNaN(gearRaw) && Math.round(gearRaw)===1) continue;
+    }
+
+    // validade do fix de GPS: descarta GPS Fix Status == 0 (só aplicável quando o canal existe)
+    if(params.gpsFixFilter && idx.gpsFix>=0){
+      const fix = num(rows[i], idx.gpsFix);
+      if(!isNaN(fix) && fix===0) continue;
+    }
+
+    // piso de velocidade mínima do GPS Speed (só aplicável quando o canal existe)
+    if(idx.gpsSpeed>=0){
+      const gs = num(rows[i], idx.gpsSpeed);
+      if(!isNaN(gs) && gs < params.speedMinKmh) continue;
+    }
+
     const tp = num(rows[i], idx.tp);
     const pedal = num(rows[i], idx.pedal);
     const loadVal = !isNaN(tp) ? tp : pedal;
@@ -904,9 +958,20 @@ function processFile(rec, params){
 
     const isWOT = loadVal >= params.wotThreshold;
     const isPartial = !isWOT && loadVal >= params.loadMin && loadVal <= params.loadMax;
+    if(!isWOT && !isPartial) continue;
+
+    // aceleração mínima (limiar diferente por regime), convertida para g independente da unidade do log
+    if(idx.accel>=0){
+      let ag = num(rows[i], idx.accel);
+      if(!isNaN(ag)){
+        if(params.accelUnit==='ms2') ag = ag/gAll;
+        const minAccel = isWOT ? params.accelMinWot : params.accelMinMid;
+        if(ag < minAccel) continue;
+      }
+    }
 
     if(isWOT){ wotCount++; out.push(computeSample(i, rpm, tp, pedal)); }
-    if(isPartial){ loadCount++; outLoad.push(computeSample(i, rpm, tp, pedal)); }
+    else { loadCount++; outLoad.push(computeSample(i, rpm, tp, pedal)); }
   }
 
   return {
@@ -1341,6 +1406,7 @@ function recomputeCalibSamples(tag, gearWanted, params){
       gear: headers.indexOf('Analyzer Calculate Gear'),
       rpm: headers.indexOf('Engine Speed'),
       gpsSpeed: headers.indexOf('GPS Speed'),
+      gpsFix: headers.indexOf('GPS Fix Status'),
       tp: headers.indexOf('Throttle Position TP TP1L'),
       et: headers.indexOf('Engine Temperature ET'),
     };
@@ -1352,15 +1418,22 @@ function recomputeCalibSamples(tag, gearWanted, params){
       if(isNaN(tp) || tp < params.wotThreshold) continue;
       const et = num(rows[i], idx.et);
       if(isNaN(et) || et<params.etMin || et>params.etMax) continue;
+      if(params.gpsFixFilter && idx.gpsFix>=0){
+        const fix = num(rows[i], idx.gpsFix);
+        if(!isNaN(fix) && fix===0) continue;
+      }
       const rpm = num(rows[i], idx.rpm);
       if(isNaN(rpm) || rpm<=0) continue;
       let a = num(rows[i], idx.accel);
       if(isNaN(a)) continue;
       if(params.accelUnit==='g') a = a*gAll;
+      let ag = a/gAll; // normaliza de volta para g, independente da unidade original do log
+      if(ag < params.accelMinWot) continue;
       let v = NaN;
       if(idx.gpsSpeed>=0){
         const gs = num(rows[i], idx.gpsSpeed);
         if(!isNaN(gs) && gs>0) v = gs/3.6;
+        if(!isNaN(gs) && gs < params.speedMinKmh) continue;
       }
       if((isNaN(v)||v<=0)){
         const gr = params.gearRatios[gearWanted-1];
