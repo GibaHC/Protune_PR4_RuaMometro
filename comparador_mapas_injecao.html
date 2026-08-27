@@ -150,6 +150,37 @@
   .calib-result .hl{ color:var(--amber); font-weight:700; }
   a.dl{ color:var(--cyan); text-decoration:none; font-size:12px; }
   a.dl:hover{ text-decoration:underline; }
+  .filelist-layout{ display:flex; gap:20px; align-items:flex-start; margin-top:4px; }
+  .filelist-main{ flex:1; min-width:0; }
+  .filelist-side{
+    width:230px; flex-shrink:0; background:var(--surface2); border:1px solid var(--line);
+    border-radius:8px; padding:14px;
+  }
+  .tagOrderRow{
+    display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid #1f252d;
+    font-family:var(--mono); font-size:12.5px;
+  }
+  .tagOrderRow:last-child{ border-bottom:none; }
+  .tagOrderRank{ color:var(--dim); width:16px; text-align:right; }
+  .tagOrderName{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .orderBtn{
+    background:var(--surface3); border:1px solid var(--line); color:var(--text);
+    border-radius:4px; width:20px; height:20px; line-height:1; cursor:pointer; font-size:11px;
+    display:flex; align-items:center; justify-content:center; padding:0;
+  }
+  .orderBtn:hover:not(:disabled){ border-color:var(--amber); color:var(--amber); }
+  .orderBtn:disabled{ opacity:.25; cursor:not-allowed; }
+  .leader-cell{ background:rgba(255,122,26,0.14); border-radius:4px; box-shadow: inset 0 0 0 1px rgba(255,122,26,0.25); }
+  .warn-icon{ cursor:help; margin-left:5px; color:#ffcc66; }
+  .legend-line{ font-size:11px; color:var(--dim); margin-top:8px; }
+  .legend-line .leader-swatch{
+    display:inline-block; width:12px; height:12px; border-radius:3px; vertical-align:-2px;
+    background:rgba(255,122,26,0.14); box-shadow: inset 0 0 0 1px rgba(255,122,26,0.4); margin-right:5px;
+  }
+  @media (max-width: 760px){
+    .filelist-layout{ flex-direction:column; }
+    .filelist-side{ width:100%; }
+  }
 </style>
 </head>
 <body>
@@ -173,16 +204,29 @@
       <span style="font-size:11px">A classificação de mapa (base / soma_40 / tira_40 / etc.) é sugerida pelo nome do arquivo — confira e corrija na tabela abaixo se necessário.</span>
     </div>
     <input type="file" id="fileInput" accept=".csv" multiple>
-    <div class="tablewrap" style="margin-top:16px;">
-      <table class="filetable" id="fileTable" style="display:none;">
-        <thead><tr>
-          <th>Arquivo</th><th>Sessão</th><th>Mapa</th><th>Linhas</th>
-          <th>Canais potência</th><th>Alertas QC</th><th>Usar p/ potência</th><th></th>
-        </tr></thead>
-        <tbody id="fileTableBody"></tbody>
-      </table>
+
+    <div class="filelist-layout">
+      <div class="filelist-main">
+        <div class="tablewrap" style="margin-top:16px;">
+          <table class="filetable" id="fileTable" style="display:none;">
+            <thead><tr>
+              <th>Arquivo</th><th>Sessão</th><th>Mapa</th><th>Linhas</th>
+              <th>Canais potência</th><th>Alertas QC</th><th>Usar p/ potência</th><th></th>
+            </tr></thead>
+            <tbody id="fileTableBody"></tbody>
+          </table>
+        </div>
+        <div id="noFiles" class="empty">Nenhum arquivo carregado ainda.</div>
+        <div class="note" style="margin-top:8px; color:var(--dimmer); font-size:11px;">A lista é ordenada por data (mais antigo primeiro), extraída do nome do arquivo.</div>
+      </div>
+
+      <div class="filelist-side">
+        <h3 style="font-size:11px; color:var(--amber); text-transform:uppercase; letter-spacing:.8px; margin:0 0 10px;">Ordem dos mapas</h3>
+        <div class="note" style="color:var(--dimmer); font-size:11px; margin-bottom:10px;">Define a ordem em que os mapas aparecem nos gráficos, tabelas e legendas.</div>
+        <div id="tagOrderList"></div>
+        <div id="noTags" class="empty" style="font-size:12px;">Nenhum mapa ainda.</div>
+      </div>
     </div>
-    <div id="noFiles" class="empty">Nenhum arquivo carregado ainda.</div>
   </div>
 </section>
 
@@ -363,12 +407,14 @@
       <div class="note-box">Escore composto por bin de RPM, normalizado (min-max) entre mapas dentro de cada bin, após contração estatística (shrinkage, força n₀ configurável) que puxa bins de poucas amostras em direção à média geral do bin. Isso evita que um mapa com poucas amostras num bin vença por ruído — passe o mouse sobre uma célula para ver RPI/AEP bruto vs. contraído.</div>
       <div class="chart-box"><canvas id="chartScore"></canvas></div>
       <div class="tablewrap"><table id="tableScore"></table></div>
+      <div class="legend-line" id="scoreLegend"></div>
     </div>
 
     <div class="tabpanel" id="tab-power">
       <div class="note-box">Estimativa de potência na roda (método cinemático F=ma + arrasto + rolamento). Só calculado para arquivos com canais de Aceleração e Marcha válidos e não sinalizados como degenerados. Valores absolutos são ordem de grandeza — a comparação relativa entre mapas é o que importa.</div>
       <div class="chart-box"><canvas id="chartPower"></canvas></div>
       <div class="tablewrap"><table id="tablePower"></table></div>
+      <div class="legend-line" id="powerLegend"></div>
     </div>
 
     <div class="tabpanel" id="tab-lambda">
@@ -401,12 +447,14 @@
       <div class="note-box">Escore composto por bin de RPM na faixa de carga média, mesma lógica de contração + min-max da aba WOT. Passe o mouse sobre uma célula para ver RPI/AEP bruto vs. contraído.</div>
       <div class="chart-box"><canvas id="chartScoreMid"></canvas></div>
       <div class="tablewrap"><table id="tableScoreMid"></table></div>
+      <div class="legend-line" id="scoreLegendMid"></div>
     </div>
 
     <div class="tabpanel" id="tab-powerMid">
       <div class="note-box">Estimativa de potência na roda em carga parcial. Como a faixa de carga média fica bem abaixo de WOT, espere valores de potência mais baixos e mais dispersos — não compare diretamente com a aba WOT.</div>
       <div class="chart-box"><canvas id="chartPowerMid"></canvas></div>
       <div class="tablewrap"><table id="tablePowerMid"></table></div>
+      <div class="legend-line" id="powerLegendMid"></div>
     </div>
 
     <div class="tabpanel" id="tab-lambdaMid">
@@ -457,6 +505,7 @@ let files = []; // {id,name, headers, rows, tag, sessionLabel, hasPowerChannels,
 let aggregated = null; // last processing result (WOT)
 let aggregatedMid = null; // last processing result (carga média / parcial)
 let fileIdSeq = 0;
+let tagOrder = []; // ordem de exibição dos mapas nos gráficos/tabelas/legendas, controlada pelo usuário
 
 // Paleta rotativa para clusters/mapas descobertos dinamicamente a partir do nome do arquivo.
 // "base"/"vvt" sempre fica ciano (referência); os demais (soma_NN, tira_NN, ou qualquer
@@ -496,6 +545,72 @@ function sessionLabel(filename){
   return day+'/'+month+(suf?('_'+suf[1]):'');
 }
 
+// Chave numérica para ordenar a lista de arquivos por data crescente (mês, dia, sufixo de sessão).
+// Arquivos sem data reconhecível vão para o final da lista.
+function dateSortKey(filename){
+  let s = filename.replace(/\.[^.]+$/,'');
+  const withYear = s.match(/^LOG_\d{4}_(\d{2})_(\d{2})/i);
+  const withoutYear = s.match(/^(\d{2})_(\d{2})/);
+  const m = withYear || withoutYear;
+  if(!m) return Number.MAX_SAFE_INTEGER;
+  const month = parseInt(m[1],10), day = parseInt(m[2],10);
+  const rest = s.slice(m[0].length);
+  const suf = rest.match(/^([a-z])(?:_|$)/i);
+  const sufOrder = suf ? suf[1].toLowerCase().charCodeAt(0) : 0;
+  return month*1000000 + day*10000 + sufOrder;
+}
+
+// Garante que um mapa recém-descoberto entre no fim da ordem de exibição, sem repetir.
+function ensureTagInOrder(tag){
+  if(!tagOrder.includes(tag)) tagOrder.push(tag);
+}
+
+// Recalcula a ordem "ativa" (só mapas presentes atualmente nos arquivos), preservando a ordem
+// manual já definida e acrescentando ao final qualquer mapa novo que ainda não estava lá.
+function currentTagsInOrder(){
+  const present = new Set(files.map(f=>f.tag));
+  const ordered = tagOrder.filter(t=>present.has(t));
+  present.forEach(t=>{ if(!ordered.includes(t)) ordered.push(t); });
+  tagOrder = ordered;
+  return ordered;
+}
+
+// Aplica a ordem global de mapas a um objeto agregado (reordena agg.tags in-place),
+// mantendo apenas os mapas que de fato têm dados nesse agregado.
+function applyTagOrder(agg){
+  if(!agg) return;
+  const present = agg.tags;
+  const ordered = tagOrder.filter(t=>present.includes(t));
+  present.forEach(t=>{ if(!ordered.includes(t)) ordered.push(t); });
+  agg.tags = ordered;
+}
+
+function moveTag(tag, direction){
+  const idx = tagOrder.indexOf(tag);
+  if(idx<0) return;
+  const newIdx = idx+direction;
+  if(newIdx<0 || newIdx>=tagOrder.length) return;
+  const tmp = tagOrder[idx]; tagOrder[idx]=tagOrder[newIdx]; tagOrder[newIdx]=tmp;
+  renderTagOrderUI();
+  if(aggregated){ applyTagOrder(aggregated); applyTagOrder(aggregatedMid); renderResults(); renderMidResults(); }
+}
+
+function renderTagOrderUI(){
+  const list = currentTagsInOrder();
+  const container = document.getElementById('tagOrderList');
+  document.getElementById('noTags').style.display = list.length? 'none':'block';
+  container.innerHTML = list.map((tag, i)=>`
+    <div class="tagOrderRow">
+      <span class="tagOrderRank">${i+1}</span>
+      <span class="tagOrderName" style="color:${colorForTag(tag)}">${tag}</span>
+      <button class="orderBtn" data-tag="${tag}" data-dir="-1" ${i===0?'disabled':''} title="Mover para cima">▲</button>
+      <button class="orderBtn" data-tag="${tag}" data-dir="1" ${i===list.length-1?'disabled':''} title="Mover para baixo">▼</button>
+    </div>`).join('');
+  container.querySelectorAll('.orderBtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>moveTag(btn.dataset.tag, parseInt(btn.dataset.dir,10)));
+  });
+}
+
 // ---------- file loading ----------
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
@@ -528,6 +643,7 @@ function handleFiles(fileList){
         qc, N: rows.length
       };
       files.push(rec);
+      ensureTagInOrder(rec.tag);
       renderFileTable();
       document.getElementById('statusMsg').textContent = '';
       document.getElementById('btnProcess').disabled = files.length===0;
@@ -574,6 +690,16 @@ function renderFileTable(){
   tbl.style.display = files.length? 'table':'none';
   document.getElementById('fileCountLabel').textContent = files.length + ' arquivo(s) carregado(s)';
   body.innerHTML = '';
+
+  // ordena a lista por data crescente (extraída do nome do arquivo); empate desfeito pelo nome
+  files.sort((a,b)=>{
+    const ka = dateSortKey(a.name), kb = dateSortKey(b.name);
+    if(ka!==kb) return ka-kb;
+    return a.name.localeCompare(b.name);
+  });
+
+  renderTagOrderUI();
+
   // datalist com todos os clusters já vistos (descobertos dinamicamente pelo nome do arquivo,
   // ou digitados manualmente) — não é uma lista fixa, só uma sugestão de autocompletar.
   const knownTags = Array.from(new Set(files.map(r=>r.tag).concat(['base'])));
@@ -613,7 +739,8 @@ function renderFileTable(){
     sel.addEventListener('change', e=>{
       const rec = files.find(x=>x.id===e.target.dataset.id);
       rec.tag = e.target.value.trim() || rec.tag;
-      renderFileTable(); // atualiza o datalist com o novo cluster, se for inédito
+      ensureTagInOrder(rec.tag);
+      renderFileTable(); // atualiza o datalist e a ordem com o novo cluster, se for inédito
     });
   });
   document.querySelectorAll('.usePowerChk').forEach(chk=>{
@@ -886,6 +1013,9 @@ document.getElementById('btnProcess').addEventListener('click', ()=>{
     aggregatedMid = aggregate(fileResults, params, 'samplesPartial');
     aggregatedMid._fileResults = fileResults;
     aggregatedMid._params = params;
+    currentTagsInOrder();
+    applyTagOrder(aggregated);
+    applyTagOrder(aggregatedMid);
     renderResults();
     renderMidResults();
     document.getElementById('resultsSection').style.display='block';
@@ -897,7 +1027,7 @@ document.getElementById('btnProcess').addEventListener('click', ()=>{
 });
 
 document.getElementById('btnReset').addEventListener('click', ()=>{
-  files = []; aggregated = null; aggregatedMid = null;
+  files = []; aggregated = null; aggregatedMid = null; tagOrder = [];
   renderFileTable();
   document.getElementById('resultsSection').style.display='none';
   document.getElementById('midloadSection').style.display='none';
@@ -975,18 +1105,23 @@ function renderScoreTab(agg, suffix){
   let hScore = '<thead><tr><th>Bin RPM</th>'+tags.map(t=>`<th style="color:${colorForTag(t)}">${t}</th>`).join('')+'</tr></thead><tbody>';
   bins.forEach(b=>{
     const bestPow = bestPowerTagInBin(stat, tags, b);
+    let leader=null, leaderVal=-Infinity;
+    tags.forEach(t=>{ const sv=stat[t][b].score; if(!isNaN(sv) && sv>leaderVal){ leaderVal=sv; leader=t; } });
     hScore += `<tr><td>${b}</td>`+ tags.map(t=>{
       const s = stat[t][b];
       const conf = s.confidence==='Alta'?'b-ok':(s.confidence==='Média'?'b-warn':'b-bad');
       const title = `RPI bruto=${fmt(s.rpi,4)} contraído=${fmt(s.rpiShrunk,4)} · AEP bruto=${fmt(s.aep,4)} contraído=${fmt(s.aepShrunk,4)}`;
       const warn = (t===bestPow && !isNaN(s.score) && s.score<0.35)
-        ? ` <span class="badge b-warn" title="Este mapa tem a melhor potência medida (confiança ≥ Média) neste bin, mas o proxy RPI/AEP penalizou o escore — não descarte só pelo escore.">⚠ potência alta / proxy baixo</span>`
+        ? ` <span class="warn-icon" title="Este mapa tem a melhor potência medida (confiança ≥ Média) neste bin, mas o proxy RPI/AEP penalizou o escore — não descarte só pelo escore.">⚠</span>`
         : '';
-      return `<td title="${title}">${fmt(s.score,3)} <span class="badge ${conf}">n=${s.n}</span>${warn}</td>`;
+      const cls = (t===leader && !isNaN(s.score)) ? ' class="leader-cell"' : '';
+      return `<td${cls} title="${title}">${fmt(s.score,3)} <span class="badge ${conf}">n=${s.n}</span>${warn}</td>`;
     }).join('') + '</tr>';
   });
   hScore += '</tbody>';
   document.getElementById('tableScore'+suffix).innerHTML = hScore;
+  const legendEl = document.getElementById('scoreLegend'+suffix);
+  if(legendEl) legendEl.innerHTML = `<span class="leader-swatch"></span>fundo destacado = mapa líder (melhor escore) no bin &nbsp;·&nbsp; <span class="warn-icon">⚠</span> = este mapa tem a melhor potência medida (confiança ≥ Média) no bin, mas o proxy RPI/AEP penalizou o escore — não descarte só pelo escore`;
 }
 
 function renderPowerTab(agg, suffix){
@@ -1020,15 +1155,20 @@ function renderPowerTab(agg, suffix){
 
   let hPow = '<thead><tr><th>Bin RPM</th>'+tags.map(t=>`<th style="color:${colorForTag(t)}">${t}</th>`).join('')+'</tr></thead><tbody>';
   bins.forEach(b=>{
+    let leader=null, leaderVal=-Infinity;
+    tags.forEach(t=>{ const s=stat[t][b]; if(s.nPower>0 && s.pHP>leaderVal){ leaderVal=s.pHP; leader=t; } });
     hPow += `<tr><td>${b}</td>`+ tags.map(t=>{
       const s = stat[t][b];
       if(s.nPower===0) return '<td>—</td>';
       const conf = s.confidencePower==='Alta'?'b-ok':(s.confidencePower==='Média'?'b-warn':'b-bad');
-      return `<td>${fmt(s.pHP,1)} wHP / ${fmt(s.torqueNm,1)} N·m <span class="badge ${conf}">n=${s.nPower}</span></td>`;
+      const cls = t===leader ? ' class="leader-cell"' : '';
+      return `<td${cls}>${fmt(s.pHP,1)} wHP / ${fmt(s.torqueNm,1)} N·m <span class="badge ${conf}">n=${s.nPower}</span></td>`;
     }).join('') + '</tr>';
   });
   hPow += '</tbody>';
   document.getElementById('tablePower'+suffix).innerHTML = hPow;
+  const legendEl = document.getElementById('powerLegend'+suffix);
+  if(legendEl) legendEl.innerHTML = `<span class="leader-swatch"></span>fundo destacado = mapa líder (maior potência estimada) no bin`;
 }
 
 function renderLambdaTab(agg, suffix){
