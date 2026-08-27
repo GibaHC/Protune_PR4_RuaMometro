@@ -400,6 +400,16 @@
           <input type="number" id="p_speedjumpwindow" value="5">
           <div class="note">amostras vizinhas ao salto também descartadas, enquanto a solução de velocidade ainda está assentando</div>
         </div>
+        <div class="field">
+          <label>ΔTP máx por amostra (%)</label>
+          <input type="number" id="p_tpjump" value="15" step="1">
+          <div class="note">descarta a amostra logo após uma mudança brusca de acelerador (ex.: soltar o pé depois de WOT) — nesse instante a amostra pode cair dentro da janela de carga média por coincidência de tempo, mas ainda carrega inércia/velocidade residual do regime anterior, não o comportamento real daquela carga</div>
+        </div>
+        <div class="field">
+          <label>Janela pós-transição de TP (amostras)</label>
+          <input type="number" id="p_tpjumpwindow" value="2">
+          <div class="note">amostras seguintes à transição também descartadas, enquanto MAP/VE ainda estão assentando</div>
+        </div>
       </div>
     </div>
 
@@ -835,6 +845,8 @@ function getParams(){
     accelMax: parseFloat(document.getElementById('p_accelmax').value),
     speedJumpMaxKmh: parseFloat(document.getElementById('p_speedjump').value),
     speedJumpWindow: parseInt(document.getElementById('p_speedjumpwindow').value),
+    tpMaxDelta: parseFloat(document.getElementById('p_tpjump').value),
+    tpJumpWindow: parseInt(document.getElementById('p_tpjumpwindow').value),
     binSize: parseFloat(document.getElementById('p_bin').value),
     lambdaTarget: parseFloat(document.getElementById('p_lambdatarget').value),
     lambdaSrc: document.getElementById('p_lambdasrc').value,
@@ -910,6 +922,25 @@ function processFile(rec, params){
         const lo=Math.max(0,i-params.speedJumpWindow), hi=Math.min(N-1,i+params.speedJumpWindow);
         for(let k=lo;k<=hi;k++) gpsSpeedExcluded[k]=true;
       }
+    }
+  }
+
+  // Despique de transição de TP: a amostra logo após uma mudança brusca de acelerador
+  // (ex.: soltar o pé depois de WOT) ainda carrega velocidade/aceleração residual do regime
+  // anterior, mesmo que o valor de TP daquele instante caia dentro da janela de carga média
+  // por coincidência de tempo de amostragem. Só marca a amostra POSTERIOR ao salto — a
+  // amostra anterior ao salto era regime estável e continua válida.
+  const loadValsAll = new Array(N);
+  for(let i=0;i<N;i++){
+    const tpv = num(rows[i], idx.tp);
+    const pv = num(rows[i], idx.pedal);
+    loadValsAll[i] = !isNaN(tpv) ? tpv : pv;
+  }
+  const tpExcluded = new Array(N).fill(false);
+  for(let i=1;i<N;i++){
+    if(!isNaN(loadValsAll[i]) && !isNaN(loadValsAll[i-1]) && Math.abs(loadValsAll[i]-loadValsAll[i-1])>params.tpMaxDelta){
+      const hi = Math.min(N-1, i+params.tpJumpWindow);
+      for(let k=i;k<=hi;k++) tpExcluded[k]=true;
     }
   }
 
@@ -989,6 +1020,9 @@ function processFile(rec, params){
 
     // despique de salto de GPS Speed (glitch de reaquisição não pego pelo GPS Fix Status)
     if(gpsSpeedExcluded[i]) continue;
+
+    // despique de transição de TP (amostra logo após mudança brusca de acelerador)
+    if(tpExcluded[i]) continue;
 
     const tp = num(rows[i], idx.tp);
     const pedal = num(rows[i], idx.pedal);
@@ -1475,11 +1509,25 @@ function recomputeCalibSamples(tag, gearWanted, params){
       }
     }
 
+    // despique de transição de TP, mesma lógica do pipeline principal
+    const tpExcluded = new Array(rows.length).fill(false);
+    {
+      const loadValsAll = new Array(rows.length);
+      for(let i=0;i<rows.length;i++) loadValsAll[i] = num(rows[i], idx.tp);
+      for(let i=1;i<rows.length;i++){
+        if(!isNaN(loadValsAll[i]) && !isNaN(loadValsAll[i-1]) && Math.abs(loadValsAll[i]-loadValsAll[i-1])>params.tpMaxDelta){
+          const hi = Math.min(rows.length-1, i+params.tpJumpWindow);
+          for(let k=i;k<=hi;k++) tpExcluded[k]=true;
+        }
+      }
+    }
+
     for(let i=0;i<rows.length;i++){
       const gearN = num(rows[i], idx.gear);
       if(Math.round(gearN)!==gearWanted) continue;
       const tp = num(rows[i], idx.tp);
       if(isNaN(tp) || tp < params.wotThreshold) continue;
+      if(tpExcluded[i]) continue;
       const et = num(rows[i], idx.et);
       if(isNaN(et) || et<params.etMin || et>params.etMax) continue;
       if(params.gpsFixFilter && idx.gpsFix>=0){
