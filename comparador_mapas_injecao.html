@@ -401,14 +401,14 @@
           <div class="note">amostras vizinhas ao salto também descartadas, enquanto a solução de velocidade ainda está assentando</div>
         </div>
         <div class="field">
-          <label>ΔTP máx por amostra (%)</label>
+          <label>Variação máxima de TP na janela (%)</label>
           <input type="number" id="p_tpjump" value="15" step="1">
-          <div class="note">descarta a amostra logo após uma mudança brusca de acelerador (ex.: soltar o pé depois de WOT) — nesse instante a amostra pode cair dentro da janela de carga média por coincidência de tempo, mas ainda carrega inércia/velocidade residual do regime anterior, não o comportamento real daquela carga</div>
+          <div class="note">amplitude máxima (máx-mín) de TP tolerada dentro da janela de estabilidade — acima disso a amostra não é regime estável, é transição (rápida ou lenta), e é descartada mesmo que nenhum degrau isolado pareça grande</div>
         </div>
         <div class="field">
-          <label>Janela pós-transição de TP (amostras)</label>
-          <input type="number" id="p_tpjumpwindow" value="2">
-          <div class="note">amostras seguintes à transição também descartadas, enquanto MAP/VE ainda estão assentando</div>
+          <label>Janela de estabilidade de TP (amostras, olhando pra trás)</label>
+          <input type="number" id="p_tpjumpwindow" value="8">
+          <div class="note">tamanho da janela retroativa usada para medir a amplitude acima — pega tanto saltos abruptos quanto lift/retomada graduais de várias amostras (que um filtro de degrau único não pega)</div>
         </div>
       </div>
     </div>
@@ -436,6 +436,30 @@
       <div class="grid-params">
         <div class="field"><label>Mínimo p/ confiança Alta</label><input type="number" id="p_confhigh" value="50"></div>
         <div class="field"><label>Mínimo p/ confiança Média</label><input type="number" id="p_confmed" value="20"></div>
+        <div class="field">
+          <label><input type="checkbox" id="p_hideLowConf" style="width:auto;margin-right:6px;vertical-align:middle;">Ocultar bins de confiança Baixa nos gráficos</label>
+          <div class="note">continuam na tabela (com o badge de n/confiança), só saem da linha do gráfico — evita que 2-3 amostras balancem visualmente a curva</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="subgrp">
+      <h3>Estatística de agregação por bin</h3>
+      <div class="grid-params">
+        <div class="field">
+          <label>Método</label>
+          <select id="p_statmethod">
+            <option value="mean" selected>Média</option>
+            <option value="median">Mediana</option>
+            <option value="trimmed">Média aparada (trimmed mean)</option>
+          </select>
+          <div class="note">aplicado a RPI, AEP, potência e torque em cada bin. Mediana/trimmed mean só fazem diferença real com n suficiente — com poucas amostras (n&lt;10), o corte da trimmed mean é zero e a mediana vira a própria média</div>
+        </div>
+        <div class="field">
+          <label>% de corte de cada lado (trimmed mean)</label>
+          <input type="number" id="p_trimpct" value="10" step="1">
+          <div class="note">só usado se o método acima for "média aparada" — com n=10, 10% corta 1 amostra de cada ponta; com n&lt;10 não corta nada</div>
+        </div>
       </div>
     </div>
 
@@ -852,6 +876,9 @@ function getParams(){
     lambdaSrc: document.getElementById('p_lambdasrc').value,
     confHigh: parseInt(document.getElementById('p_confhigh').value),
     confMed: parseInt(document.getElementById('p_confmed').value),
+    hideLowConfidenceInCharts: document.getElementById('p_hideLowConf').checked,
+    statMethod: document.getElementById('p_statmethod').value,
+    trimPct: parseFloat(document.getElementById('p_trimpct').value),
     scoreWeight: parseInt(document.getElementById('p_weight').value)/100,
     shrinkN0: parseFloat(document.getElementById('p_shrink').value),
   };
@@ -925,11 +952,11 @@ function processFile(rec, params){
     }
   }
 
-  // Despique de transição de TP: a amostra logo após uma mudança brusca de acelerador
-  // (ex.: soltar o pé depois de WOT) ainda carrega velocidade/aceleração residual do regime
-  // anterior, mesmo que o valor de TP daquele instante caia dentro da janela de carga média
-  // por coincidência de tempo de amostragem. Só marca a amostra POSTERIOR ao salto — a
-  // amostra anterior ao salto era regime estável e continua válida.
+  // Despique de estabilidade de TP: em vez de olhar só o degrau anterior, mede a amplitude
+  // (máx-mín) de TP dentro de uma janela retroativa. Isso pega tanto saltos abruptos quanto
+  // transições lentas de várias amostras (lift-e-retomada), que um filtro de degrau único
+  // não pega — o acelerador pode cair suavemente por 8-10 amostras sem nenhum passo isolado
+  // ultrapassar o limiar, mas ainda assim não ser regime estável.
   const loadValsAll = new Array(N);
   for(let i=0;i<N;i++){
     const tpv = num(rows[i], idx.tp);
@@ -937,11 +964,15 @@ function processFile(rec, params){
     loadValsAll[i] = !isNaN(tpv) ? tpv : pv;
   }
   const tpExcluded = new Array(N).fill(false);
-  for(let i=1;i<N;i++){
-    if(!isNaN(loadValsAll[i]) && !isNaN(loadValsAll[i-1]) && Math.abs(loadValsAll[i]-loadValsAll[i-1])>params.tpMaxDelta){
-      const hi = Math.min(N-1, i+params.tpJumpWindow);
-      for(let k=i;k<=hi;k++) tpExcluded[k]=true;
+  const W = Math.max(1, params.tpJumpWindow);
+  for(let i=0;i<N;i++){
+    if(i < W-1){ tpExcluded[i]=true; continue; } // sem histórico suficiente ainda
+    let lo=Infinity, hi=-Infinity, any=false;
+    for(let k=i-W+1;k<=i;k++){
+      const v = loadValsAll[k];
+      if(!isNaN(v)){ any=true; if(v<lo) lo=v; if(v>hi) hi=v; }
     }
+    if(any && (hi-lo) > params.tpMaxDelta) tpExcluded[i]=true;
   }
 
   const out = [];
@@ -1063,6 +1094,23 @@ function processFile(rec, params){
 // ---------- aggregation ----------
 function mean(arr){ const v=arr.filter(x=>!isNaN(x)); return v.length? v.reduce((a,b)=>a+b,0)/v.length : NaN; }
 
+// Estatística de agregação por bin, configurável: média, mediana, ou média aparada.
+// Mediana/aparada só têm efeito real com n suficiente; com n baixo se comportam como a média.
+function binStat(arr, params){
+  const v = arr.filter(x=>!isNaN(x)).sort((a,b)=>a-b);
+  if(!v.length) return NaN;
+  if(params.statMethod==='median'){
+    const mid = Math.floor(v.length/2);
+    return v.length%2 ? v[mid] : (v[mid-1]+v[mid])/2;
+  }
+  if(params.statMethod==='trimmed'){
+    const k = Math.floor(v.length * ((params.trimPct||0)/100));
+    const trimmed = (v.length - 2*k > 0) ? v.slice(k, v.length-k) : v;
+    return trimmed.reduce((a,b)=>a+b,0)/trimmed.length;
+  }
+  return v.reduce((a,b)=>a+b,0)/v.length;
+}
+
 function aggregate(fileResults, params, sampleKey){
   sampleKey = sampleKey || 'samples';
   const byTag = {};
@@ -1086,15 +1134,15 @@ function aggregate(fileResults, params, sampleKey){
       const powerRows = rowsInBin.filter(s=>s.usePower && !isNaN(s.pHP));
       stat[t][b] = {
         n: rowsInBin.length,
-        rpi: mean(rowsInBin.map(s=>s.rpi)),
-        aep: mean(rowsInBin.map(s=>s.aep)),
-        lambda: mean(rowsInBin.map(s=>s.lambda)),
-        gft: mean(rowsInBin.map(s=>s.gft)),
-        fct: mean(rowsInBin.map(s=>s.fct)),
-        inj: mean(rowsInBin.map(s=>s.inj)),
+        rpi: binStat(rowsInBin.map(s=>s.rpi), params),
+        aep: binStat(rowsInBin.map(s=>s.aep), params),
+        lambda: binStat(rowsInBin.map(s=>s.lambda), params),
+        gft: binStat(rowsInBin.map(s=>s.gft), params),
+        fct: binStat(rowsInBin.map(s=>s.fct), params),
+        inj: binStat(rowsInBin.map(s=>s.inj), params),
         nPower: powerRows.length,
-        pHP: mean(powerRows.map(s=>s.pHP)),
-        torqueNm: mean(powerRows.map(s=>s.torqueNm)),
+        pHP: binStat(powerRows.map(s=>s.pHP), params),
+        torqueNm: binStat(powerRows.map(s=>s.torqueNm), params),
       };
     });
   });
@@ -1208,7 +1256,7 @@ function renderResults(){
 
 function renderMidResults(){
   renderScoreTab(aggregatedMid, 'Mid');
-  renderPowerTab(aggregatedMid, 'Mid');
+  renderPowerTab(aggregatedMid, 'Mid', aggregated);
   renderLambdaTab(aggregatedMid, 'Mid');
 }
 
@@ -1225,6 +1273,7 @@ function bestPowerTagInBin(stat, tags, b){
 
 function renderScoreTab(agg, suffix){
   const {tags, bins, stat} = agg;
+  const hideLow = agg._params.hideLowConfidenceInCharts;
   const ctxS = document.getElementById('chartScore'+suffix).getContext('2d');
   if(charts['Score'+suffix]) charts['Score'+suffix].destroy();
   charts['Score'+suffix] = new Chart(ctxS, {
@@ -1233,10 +1282,10 @@ function renderScoreTab(agg, suffix){
       labels: bins.map(b=>b+'–'+(b+agg._params.binSize)),
       datasets: tags.map(t=>({
         label:t,
-        data: bins.map(b=>stat[t][b].score),
+        data: bins.map(b=>(hideLow && stat[t][b].confidence==='Baixa') ? null : stat[t][b].score),
         borderColor: colorForTag(t),
         backgroundColor:'transparent',
-        spanGaps:true, tension:.25, pointRadius:3,
+        spanGaps: !hideLow, tension:.25, pointRadius:3,
       }))
     },
     options:{ responsive:true, maintainAspectRatio:false,
@@ -1267,8 +1316,9 @@ function renderScoreTab(agg, suffix){
   if(legendEl) legendEl.innerHTML = `<span class="leader-swatch"></span>fundo destacado = mapa líder (melhor escore) no bin &nbsp;·&nbsp; <span class="warn-icon">⚠</span> = este mapa tem a melhor potência medida (confiança ≥ Média) no bin, mas o proxy RPI/AEP penalizou o escore — não descarte só pelo escore`;
 }
 
-function renderPowerTab(agg, suffix){
+function renderPowerTab(agg, suffix, refAgg){
   const {tags, bins, stat} = agg;
+  const hideLow = agg._params.hideLowConfidenceInCharts;
   const canvas = document.getElementById('chartPower'+suffix);
   const anyPower = tags.some(t=>bins.some(b=>!isNaN(stat[t][b].pHP)));
   if(anyPower){
@@ -1280,10 +1330,10 @@ function renderPowerTab(agg, suffix){
         labels: bins.map(b=>b+'–'+(b+agg._params.binSize)),
         datasets: tags.map(t=>({
           label:t,
-          data: bins.map(b=>stat[t][b].pHP),
+          data: bins.map(b=>(hideLow && stat[t][b].confidencePower==='Baixa') ? null : stat[t][b].pHP),
           borderColor: colorForTag(t),
           backgroundColor:'transparent',
-          spanGaps:true, tension:.25, pointRadius:3,
+          spanGaps: !hideLow, tension:.25, pointRadius:3,
         }))
       },
       options:{ responsive:true, maintainAspectRatio:false,
@@ -1305,13 +1355,24 @@ function renderPowerTab(agg, suffix){
       if(s.nPower===0) return '<td>—</td>';
       const conf = s.confidencePower==='Alta'?'b-ok':(s.confidencePower==='Média'?'b-warn':'b-bad');
       const cls = t===leader ? ' class="leader-cell"' : '';
-      return `<td${cls}>${fmt(s.pHP,1)} wHP / ${fmt(s.torqueNm,1)} N·m <span class="badge ${conf}">n=${s.nPower}</span></td>`;
+      let warn = '';
+      if(refAgg){
+        const ref = refAgg.stat[t] && refAgg.stat[t][b];
+        if(ref && ref.nPower>0 && s.pHP > ref.pHP){
+          warn = ` <span class="warn-icon" title="Potência em carga parcial (${fmt(s.pHP,1)} wHP) maior que em WOT (${fmt(ref.pHP,1)} wHP) neste bin — fisicamente improvável para motor aspirado. Provável contaminação por inclinação de pista (acelerômetro sem referência de nível) ou transição não filtrada, não um resultado real. Trate com desconfiança.">⚠</span>`;
+        }
+      }
+      return `<td${cls}>${fmt(s.pHP,1)} wHP / ${fmt(s.torqueNm,1)} N·m <span class="badge ${conf}">n=${s.nPower}</span>${warn}</td>`;
     }).join('') + '</tr>';
   });
   hPow += '</tbody>';
   document.getElementById('tablePower'+suffix).innerHTML = hPow;
   const legendEl = document.getElementById('powerLegend'+suffix);
-  if(legendEl) legendEl.innerHTML = `<span class="leader-swatch"></span>fundo destacado = mapa líder (maior potência estimada) no bin`;
+  if(legendEl){
+    legendEl.innerHTML = refAgg
+      ? `<span class="leader-swatch"></span>fundo destacado = mapa líder (maior potência estimada) no bin &nbsp;·&nbsp; <span class="warn-icon">⚠</span> = potência em carga parcial maior que em WOT no mesmo bin — fisicamente improvável, provável contaminação de inclinação de pista ou transição não filtrada, não confie neste número sem investigar`
+      : `<span class="leader-swatch"></span>fundo destacado = mapa líder (maior potência estimada) no bin`;
+  }
 }
 
 function renderLambdaTab(agg, suffix){
@@ -1509,16 +1570,20 @@ function recomputeCalibSamples(tag, gearWanted, params){
       }
     }
 
-    // despique de transição de TP, mesma lógica do pipeline principal
+    // despique de estabilidade de TP (janela retroativa de amplitude), mesma lógica do pipeline principal
     const tpExcluded = new Array(rows.length).fill(false);
     {
       const loadValsAll = new Array(rows.length);
       for(let i=0;i<rows.length;i++) loadValsAll[i] = num(rows[i], idx.tp);
-      for(let i=1;i<rows.length;i++){
-        if(!isNaN(loadValsAll[i]) && !isNaN(loadValsAll[i-1]) && Math.abs(loadValsAll[i]-loadValsAll[i-1])>params.tpMaxDelta){
-          const hi = Math.min(rows.length-1, i+params.tpJumpWindow);
-          for(let k=i;k<=hi;k++) tpExcluded[k]=true;
+      const W = Math.max(1, params.tpJumpWindow);
+      for(let i=0;i<rows.length;i++){
+        if(i < W-1){ tpExcluded[i]=true; continue; }
+        let lo=Infinity, hi=-Infinity, any=false;
+        for(let k=i-W+1;k<=i;k++){
+          const v = loadValsAll[k];
+          if(!isNaN(v)){ any=true; if(v<lo) lo=v; if(v>hi) hi=v; }
         }
+        if(any && (hi-lo) > params.tpMaxDelta) tpExcluded[i]=true;
       }
     }
 
