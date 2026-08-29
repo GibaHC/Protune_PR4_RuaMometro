@@ -171,6 +171,7 @@
   .orderBtn:hover:not(:disabled){ border-color:var(--amber); color:var(--amber); }
   .orderBtn:disabled{ opacity:.25; cursor:not-allowed; }
   .leader-cell{ background:rgba(255,122,26,0.14); border-radius:4px; box-shadow: inset 0 0 0 1px rgba(255,122,26,0.25); }
+  .cell-excluded{ opacity:.4; }
   .warn-icon{ cursor:help; margin-left:5px; color:#ffcc66; }
   .legend-line{ font-size:11px; color:var(--dim); margin-top:8px; }
   .legend-line .leader-swatch{
@@ -1600,8 +1601,15 @@ function renderScoreTab(agg, suffix){
   let hScore = '<thead><tr><th>Bin RPM</th>'+tags.map(t=>`<th style="color:${colorForTag(t)}">${t}</th>`).join('')+'</tr></thead><tbody>';
   bins.forEach(b=>{
     const bestPow = bestPowerTagInBin(stat, tags, b);
+    // Se "ocultar baixa confiança" está ligado, o líder do bin considera só quem está de fato
+    // plotado no gráfico — um bin de confiança Baixa não deve roubar o destaque de um valor
+    // que nem aparece na linha.
     let leader=null, leaderVal=-Infinity;
-    tags.forEach(t=>{ const sv=stat[t][b].score; if(!isNaN(sv) && sv>leaderVal){ leaderVal=sv; leader=t; } });
+    tags.forEach(t=>{
+      const sv=stat[t][b].score;
+      if(hideLow && stat[t][b].confidence==='Baixa') return;
+      if(!isNaN(sv) && sv>leaderVal){ leaderVal=sv; leader=t; }
+    });
     hScore += `<tr><td>${b}</td>`+ tags.map(t=>{
       const s = stat[t][b];
       const conf = s.confidence==='Alta'?'b-ok':(s.confidence==='Média'?'b-warn':'b-bad');
@@ -1609,14 +1617,16 @@ function renderScoreTab(agg, suffix){
       const warn = (t===bestPow && !isNaN(s.score) && s.score<0.35)
         ? ` <span class="warn-icon" title="Este mapa tem a melhor potência medida (confiança ≥ Média) neste bin, mas o proxy RPI/AEP penalizou o escore — não descarte só pelo escore.">⚠</span>`
         : '';
-      const cls = (t===leader && !isNaN(s.score)) ? ' class="leader-cell"' : '';
-      return `<td${cls} title="${title}">${fmt(s.score,3)} <span class="badge ${conf}">n=${s.n}</span>${warn}</td>`;
+      const excluded = hideLow && s.confidence==='Baixa';
+      const cls = (t===leader && !isNaN(s.score)) ? ' class="leader-cell"' : (excluded ? ' class="cell-excluded"' : '');
+      const excludedTitle = excluded ? ' title="Confiança Baixa — oculto na linha do gráfico, mostrado aqui só para referência"' : '';
+      return `<td${cls}${excludedTitle || ` title="${title}"`}>${fmt(s.score,3)} <span class="badge ${conf}">n=${s.n}</span>${warn}</td>`;
     }).join('') + '</tr>';
   });
   hScore += '</tbody>';
   document.getElementById('tableScore'+suffix).innerHTML = hScore;
   const legendEl = document.getElementById('scoreLegend'+suffix);
-  if(legendEl) legendEl.innerHTML = `<span class="leader-swatch"></span>fundo destacado = mapa líder (melhor escore) no bin &nbsp;·&nbsp; <span class="warn-icon">⚠</span> = este mapa tem a melhor potência medida (confiança ≥ Média) no bin, mas o proxy RPI/AEP penalizou o escore — não descarte só pelo escore`;
+  if(legendEl) legendEl.innerHTML = `<span class="leader-swatch"></span>fundo destacado = mapa líder (melhor escore) no bin &nbsp;·&nbsp; <span class="warn-icon">⚠</span> = este mapa tem a melhor potência medida (confiança ≥ Média) no bin, mas o proxy RPI/AEP penalizou o escore — não descarte só pelo escore${hideLow ? ' &nbsp;·&nbsp; célula esmaecida = confiança Baixa, oculta na linha do gráfico' : ''}`;
 }
 
 function renderPowerTab(agg, suffix, refAgg){
@@ -1651,13 +1661,21 @@ function renderPowerTab(agg, suffix, refAgg){
 
   let hPow = '<thead><tr><th>Bin RPM</th>'+tags.map(t=>`<th style="color:${colorForTag(t)}">${t}</th>`).join('')+'</tr></thead><tbody>';
   bins.forEach(b=>{
+    // Mesma regra do escore: se "ocultar baixa confiança" está ligado, o líder do bin não
+    // considera quem está de fora da linha do gráfico.
     let leader=null, leaderVal=-Infinity;
-    tags.forEach(t=>{ const s=stat[t][b]; if(s.nPower>0 && s.pHP>leaderVal){ leaderVal=s.pHP; leader=t; } });
+    tags.forEach(t=>{
+      const s=stat[t][b];
+      if(hideLow && s.confidencePower==='Baixa') return;
+      if(s.nPower>0 && s.pHP>leaderVal){ leaderVal=s.pHP; leader=t; }
+    });
     hPow += `<tr><td>${b}</td>`+ tags.map(t=>{
       const s = stat[t][b];
       if(s.nPower===0) return '<td>—</td>';
       const conf = s.confidencePower==='Alta'?'b-ok':(s.confidencePower==='Média'?'b-warn':'b-bad');
-      const cls = t===leader ? ' class="leader-cell"' : '';
+      const excluded = hideLow && s.confidencePower==='Baixa';
+      const cls = (t===leader) ? ' class="leader-cell"' : (excluded ? ' class="cell-excluded"' : '');
+      const excludedTitle = excluded ? ' title="Confiança Baixa — oculto na linha do gráfico, mostrado aqui só para referência"' : '';
       let warn = '';
       if(refAgg){
         const ref = refAgg.stat[t] && refAgg.stat[t][b];
@@ -1666,16 +1684,17 @@ function renderPowerTab(agg, suffix, refAgg){
           warn = ` <span class="warn-icon" title="Potência em carga parcial (${fmt(s.pHP,1)} wHP) maior que em WOT (${fmt(ref.pHP,1)} wHP) neste bin — fisicamente improvável para motor aspirado.${gradeNote} Provável contaminação por inclinação de pista ou transição não filtrada, não um resultado real. Trate com desconfiança.">⚠</span>`;
         }
       }
-      return `<td${cls}>${fmt(s.pHP,1)} wHP / ${fmt(s.torqueNm,1)} N·m <span class="badge ${conf}">n=${s.nPower}</span>${warn}</td>`;
+      return `<td${cls}${excludedTitle}>${fmt(s.pHP,1)} wHP / ${fmt(s.torqueNm,1)} N·m <span class="badge ${conf}">n=${s.nPower}</span>${warn}</td>`;
     }).join('') + '</tr>';
   });
   hPow += '</tbody>';
   document.getElementById('tablePower'+suffix).innerHTML = hPow;
   const legendEl = document.getElementById('powerLegend'+suffix);
   if(legendEl){
+    const excludedNote = hideLow ? ' &nbsp;·&nbsp; célula esmaecida = confiança Baixa, oculta na linha do gráfico' : '';
     legendEl.innerHTML = refAgg
-      ? `<span class="leader-swatch"></span>fundo destacado = mapa líder (maior potência estimada) no bin &nbsp;·&nbsp; <span class="warn-icon">⚠</span> = potência em carga parcial maior que em WOT no mesmo bin — fisicamente improvável, provável contaminação de inclinação de pista ou transição não filtrada, não confie neste número sem investigar`
-      : `<span class="leader-swatch"></span>fundo destacado = mapa líder (maior potência estimada) no bin`;
+      ? `<span class="leader-swatch"></span>fundo destacado = mapa líder (maior potência estimada) no bin &nbsp;·&nbsp; <span class="warn-icon">⚠</span> = potência em carga parcial maior que em WOT no mesmo bin — fisicamente improvável, provável contaminação de inclinação de pista ou transição não filtrada, não confie neste número sem investigar${excludedNote}`
+      : `<span class="leader-swatch"></span>fundo destacado = mapa líder (maior potência estimada) no bin${excludedNote}`;
   }
 }
 
