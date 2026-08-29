@@ -227,6 +227,15 @@
         <div id="noTags" class="empty" style="font-size:12px;">Nenhum mapa ainda.</div>
       </div>
     </div>
+
+    <div class="subgrp">
+      <h3>Logs de dashboard (enriquecimento de altitude)</h3>
+      <div class="note" style="color:var(--dimmer); font-size:11px; margin-bottom:10px;">
+        Arraste junto com os logs de ECU no mesmo dropzone acima — a ferramenta detecta sozinha pelo cabeçalho (tem GPS Altitude, não tem Corrected VE). Não entram no sistema de mapas/tags; servem só para casar por data/hora GPS e trazer altitude/rampa como diagnóstico para as amostras de ECU que caírem dentro do período coberto.
+      </div>
+      <div id="dashFileTableWrap" class="tablewrap" style="display:none;"></div>
+      <div id="noDashFiles" class="empty" style="font-size:12px;">Nenhum log de dashboard carregado ainda.</div>
+    </div>
   </div>
 </section>
 
@@ -580,6 +589,7 @@
 
 // ---------- state ----------
 let files = []; // {id,name, headers, rows, tag, sessionLabel, hasPowerChannels, usePower, qc, N}
+let dashFiles = []; // {id,name,headers,rows,N,summary} — logs de dashboard, usados só para enriquecer com altitude/rampa
 let aggregated = null; // last processing result (WOT)
 let aggregatedMid = null; // last processing result (carga média / parcial)
 let fileIdSeq = 0;
@@ -709,6 +719,19 @@ function handleFiles(fileList){
       const parsed = Papa.parse(ev.target.result, {skipEmptyLines:true});
       const headers = parsed.data[0];
       const rows = parsed.data.slice(1);
+
+      if(isDashFile(headers)){
+        const rec = {
+          id: 'd'+(fileIdSeq++), name:f.name, headers, rows, N: rows.length
+        };
+        rec.summary = summarizeDashFile(rec);
+        dashFiles.push(rec);
+        renderDashFileTable();
+        document.getElementById('statusMsg').textContent = '';
+        document.getElementById('btnProcess').disabled = files.length===0;
+        return;
+      }
+
       const idxAccel = headers.indexOf('Acceleration');
       const idxGear = headers.indexOf('Analyzer Calculate Gear');
       const idxRpm = headers.indexOf('Engine Speed');
@@ -728,6 +751,158 @@ function handleFiles(fileList){
     };
     reader.readAsText(f);
   });
+}
+
+// Um log de dashboard tem GPS Altitude mas não tem os canais de VE/VVT da ECU — é assim que
+// diferenciamos automaticamente, sem o usuário precisar marcar nada.
+function isDashFile(headers){
+  return headers.includes('GPS Altitude') && !headers.includes('Corrected VE');
+}
+
+// ---- Sincronização por tempo absoluto (GPS UTC Date/Time -> epoch), com detecção de corte
+// de sessão (poder desligado/religado) onde o deslocamento entre Datalog Time e o epoch GPS
+// muda de forma abrupta. Usado tanto para os logs de dashboard quanto para os de ECU, já que
+// ambos têm os mesmos canais de data/hora GPS. ----
+function gpsToEpoch(dateVal, timeVal){
+  if(isNaN(dateVal) || isNaN(timeVal) || dateVal<=0) return NaN;
+  const d = Math.floor(dateVal/10000), mo = Math.floor((dateVal%10000)/100), y = dateVal%100;
+  const hh = Math.floor(timeVal/10000), mm = Math.floor((timeVal%10000)/100), ss = timeVal%100;
+  if(d<1||d>31||mo<1||mo>12) return NaN;
+  return Date.UTC(2000+y, mo-1, d, hh, mm, Math.floor(ss), Math.round((ss%1)*1000))/1000;
+}
+
+function buildAbsoluteTimeline(rows, idxDT, idxDate, idxTime, idxSats, minSats){
+  const N = rows.length;
+  const absTime = new Array(N).fill(NaN);
+  let offset = null, sessionCount = 0;
+  for(let i=0;i<N;i++){
+    const dt = num(rows[i], idxDT);
+    const sats = idxSats>=0 ? num(rows[i], idxSats) : Infinity;
+    const rawEpoch = gpsToEpoch(num(rows[i],idxDate), num(rows[i],idxTime));
+    if(!isNaN(rawEpoch) && (idxSats<0 || sats>=minSats)){
+      const candidate = rawEpoch - dt;
+      if(offset===null || Math.abs(candidate-offset) > 3){ offset = candidate; sessionCount++; }
+      else offset = offset*0.98 + candidate*0.02;
+    }
+    if(offset!==null) absTime[i] = dt + offset;
+  }
+  return {absTime, sessionCount};
+}
+
+function haversineMeters(lat1,lon1,lat2,lon2){
+  const R=6371000, toRad=x=>x*Math.PI/180;
+  const dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
+  const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(a));
+}
+
+const DASH_MIN_SATS = 4;
+const DASH_SMOOTH_WINDOW = 25; // pontos, ~0.5s a 50Hz
+const DASH_MAX_GAP_S = 5;      // além disso, considera sem cobertura
+
+function summarizeDashFile(rec){
+  const idx = {
+    dt: rec.headers.indexOf('Datalog Time'), date: rec.headers.indexOf('GPS UTC Date'),
+    time: rec.headers.indexOf('GPS UTC Time'), sats: rec.headers.indexOf('GPS Sats Used'),
+    alt: rec.headers.indexOf('GPS Altitude')
+  };
+  const {absTime, sessionCount} = buildAbsoluteTimeline(rec.rows, idx.dt, idx.date, idx.time, idx.sats, DASH_MIN_SATS);
+  let validN=0, altMin=Infinity, altMax=-Infinity, firstT=null, lastT=null;
+  for(let i=0;i<rec.rows.length;i++){
+    if(isNaN(absTime[i])) continue;
+    const sats = num(rec.rows[i], idx.sats), alt = num(rec.rows[i], idx.alt);
+    if(sats>=DASH_MIN_SATS && alt!==0){
+      validN++;
+      if(alt<altMin) altMin=alt;
+      if(alt>altMax) altMax=alt;
+      if(firstT===null) firstT=absTime[i];
+      lastT=absTime[i];
+    }
+  }
+  return {
+    sessionCount, validN,
+    coveragePct: rec.rows.length ? (100*validN/rec.rows.length) : 0,
+    altMin: isFinite(altMin)?altMin:NaN, altMax: isFinite(altMax)?altMax:NaN,
+    firstT, lastT
+  };
+}
+
+function fmtDateTime(epoch){
+  if(epoch===null || isNaN(epoch)) return '—';
+  return new Date(epoch*1000).toISOString().replace('T',' ').replace('Z','').slice(0,19)+' UTC';
+}
+
+function renderDashFileTable(){
+  const wrap = document.getElementById('dashFileTableWrap');
+  const empty = document.getElementById('noDashFiles');
+  if(!dashFiles.length){ wrap.style.display='none'; empty.style.display='block'; return; }
+  wrap.style.display='block'; empty.style.display='none';
+  let h = '<table><thead><tr><th>Arquivo</th><th>Linhas</th><th>Sessões</th><th>Cobertura alt.</th><th>Faixa de altitude</th><th>Período (UTC)</th><th></th></tr></thead><tbody>';
+  dashFiles.forEach(rec=>{
+    const s = rec.summary;
+    h += `<tr><td>${rec.name.length>28?rec.name.slice(0,26)+'…':rec.name}</td><td>${rec.N}</td><td>${s.sessionCount}</td>
+      <td>${fmt(s.coveragePct,0)}%</td><td>${fmt(s.altMin,0)}–${fmt(s.altMax,0)} m</td>
+      <td style="white-space:normal;font-size:11px;">${fmtDateTime(s.firstT)} → ${fmtDateTime(s.lastT)}</td>
+      <td><button data-id="${rec.id}" class="btn secondary removeDashBtn" style="padding:4px 10px;font-size:11px;">remover</button></td></tr>`;
+  });
+  h += '</tbody></table>';
+  wrap.innerHTML = h;
+  document.querySelectorAll('.removeDashBtn').forEach(btn=>{
+    btn.addEventListener('click', e=>{
+      dashFiles = dashFiles.filter(x=>x.id!==e.target.dataset.id);
+      renderDashFileTable();
+    });
+  });
+}
+
+// Constrói a linha do tempo unificada de altitude a partir de todos os logs de dashboard
+// carregados (concatenados e ordenados por tempo absoluto), com suavização leve.
+function buildDashAltitudeTimeline(){
+  if(!dashFiles.length) return null;
+  let pts = [];
+  dashFiles.forEach(rec=>{
+    const idx = {
+      dt: rec.headers.indexOf('Datalog Time'), date: rec.headers.indexOf('GPS UTC Date'),
+      time: rec.headers.indexOf('GPS UTC Time'), sats: rec.headers.indexOf('GPS Sats Used'),
+      alt: rec.headers.indexOf('GPS Altitude'), lat: rec.headers.indexOf('GPS Latitude'),
+      lon: rec.headers.indexOf('GPS Longitude')
+    };
+    const {absTime} = buildAbsoluteTimeline(rec.rows, idx.dt, idx.date, idx.time, idx.sats, DASH_MIN_SATS);
+    for(let i=0;i<rec.rows.length;i++){
+      if(isNaN(absTime[i])) continue;
+      const sats = num(rec.rows[i], idx.sats), alt = num(rec.rows[i], idx.alt);
+      if(sats>=DASH_MIN_SATS && alt!==0){
+        pts.push({t:absTime[i], alt, lat:num(rec.rows[i],idx.lat), lon:num(rec.rows[i],idx.lon)});
+      }
+    }
+  });
+  if(!pts.length) return null;
+  pts.sort((a,b)=>a.t-b.t);
+  const W = DASH_SMOOTH_WINDOW;
+  const smoothed = pts.map((p,i)=>{
+    const lo=Math.max(0,i-W), hi=Math.min(pts.length-1,i+W);
+    let sum=0,c=0; for(let k=lo;k<=hi;k++){ sum+=pts[k].alt; c++; }
+    return {t:p.t, alt:sum/c, lat:p.lat, lon:p.lon};
+  });
+
+  function altAt(t){
+    let lo=0, hi=smoothed.length-1;
+    if(t<smoothed[0].t || t>smoothed[hi].t) return null;
+    while(hi-lo>1){ const mid=(lo+hi)>>1; if(smoothed[mid].t<t) lo=mid; else hi=mid; }
+    const a=smoothed[lo], b=smoothed[hi];
+    if(b.t-a.t>DASH_MAX_GAP_S) return null;
+    const f=(t-a.t)/((b.t-a.t)||1);
+    return { alt:a.alt+(b.alt-a.alt)*f, lat:a.lat+(b.lat-a.lat)*f, lon:a.lon+(b.lon-a.lon)*f };
+  }
+  function gradeAt(t, halfWindow){
+    halfWindow = halfWindow || 1.5;
+    const p1=altAt(t-halfWindow), p2=altAt(t+halfWindow);
+    if(!p1||!p2) return NaN;
+    const dist = haversineMeters(p1.lat,p1.lon,p2.lat,p2.lon);
+    if(dist<5) return NaN;
+    return (p2.alt-p1.alt)/dist*100;
+  }
+  return {altAt, gradeAt, coverageStart: smoothed[0].t, coverageEnd: smoothed[smoothed.length-1].t};
 }
 
 function runQC(headers, rows, idxAccel, idxGear, idxRpm){
@@ -891,7 +1066,7 @@ document.getElementById('p_weight').addEventListener('input', e=>{
 // ---------- per-file processing ----------
 function num(row, i){ if(i<0) return NaN; const v = parseFloat(row[i]); return v; }
 
-function processFile(rec, params){
+function processFile(rec, params, dashTimeline){
   const headers = rec.headers, rows = rec.rows;
   const idx = {
     accel: headers.indexOf('Acceleration'),
@@ -905,12 +1080,23 @@ function processFile(rec, params){
     pedal: headers.indexOf('Pedal 1 Position PP1'),
     gpsSpeed: headers.indexOf('GPS Speed'),
     gpsFix: headers.indexOf('GPS Fix Status'),
+    gpsDate: headers.indexOf('GPS UTC Date'),
+    gpsTime: headers.indexOf('GPS UTC Time'),
+    gpsSats: headers.indexOf('GPS Sats Used'),
     rpm: headers.indexOf('Engine Speed'),
     inj: headers.indexOf('Fuel Injection Timing'),
     gft: headers.indexOf('Global Fuel Trim'),
     fct: headers.indexOf('Fuel Comp Total'),
   };
   const N = rows.length;
+
+  // Timeline absoluta deste próprio arquivo de ECU, só construída se houver um timeline de
+  // dashboard carregado para casar contra (evita custo à toa quando não há enriquecimento).
+  let ecuAbsTime = null;
+  if(dashTimeline && idx.gpsDate>=0 && idx.gpsTime>=0){
+    ecuAbsTime = buildAbsoluteTimeline(rows, headers.indexOf('Datalog Time'), idx.gpsDate, idx.gpsTime, idx.gpsSats, DASH_MIN_SATS).absTime;
+  }
+
   const etVals = new Array(N);
   for(let i=0;i<N;i++) etVals[i] = num(rows[i], idx.et);
 
@@ -1021,10 +1207,16 @@ function processFile(rec, params){
       }
     }
 
+    let grade = NaN;
+    if(dashTimeline && ecuAbsTime && !isNaN(ecuAbsTime[i])){
+      const g = dashTimeline.gradeAt(ecuAbsTime[i]);
+      if(!isNaN(g)) grade = g;
+    }
+
     return {
       rpm, bin: Math.floor(rpm/params.binSize)*params.binSize,
       gear: num(rows[i], idx.gear),
-      cve, map:mapv, lambda, inj, gft, fct, rpi, aep, pHP, torqueNm
+      cve, map:mapv, lambda, inj, gft, fct, rpi, aep, pHP, torqueNm, grade
     };
   }
 
@@ -1140,6 +1332,7 @@ function aggregate(fileResults, params, sampleKey){
         gft: binStat(rowsInBin.map(s=>s.gft), params),
         fct: binStat(rowsInBin.map(s=>s.fct), params),
         inj: binStat(rowsInBin.map(s=>s.inj), params),
+        grade: binStat(rowsInBin.map(s=>s.grade), params),
         nPower: powerRows.length,
         pHP: binStat(powerRows.map(s=>s.pHP), params),
         torqueNm: binStat(powerRows.map(s=>s.torqueNm), params),
@@ -1197,7 +1390,8 @@ document.getElementById('btnProcess').addEventListener('click', ()=>{
   document.getElementById('statusMsg').textContent = 'processando…';
   setTimeout(()=>{ // let UI paint
     const params = getParams();
-    const fileResults = files.map(rec=>processFile(rec, params));
+    const dashTimeline = buildDashAltitudeTimeline();
+    const fileResults = files.map(rec=>processFile(rec, params, dashTimeline));
     aggregated = aggregate(fileResults, params, 'samples');
     aggregated._fileResults = fileResults;
     aggregated._params = params;
@@ -1218,8 +1412,9 @@ document.getElementById('btnProcess').addEventListener('click', ()=>{
 });
 
 document.getElementById('btnReset').addEventListener('click', ()=>{
-  files = []; aggregated = null; aggregatedMid = null; tagOrder = [];
+  files = []; dashFiles = []; aggregated = null; aggregatedMid = null; tagOrder = [];
   renderFileTable();
+  renderDashFileTable();
   document.getElementById('resultsSection').style.display='none';
   document.getElementById('midloadSection').style.display='none';
   document.getElementById('calibSection').style.display='none';
@@ -1359,7 +1554,8 @@ function renderPowerTab(agg, suffix, refAgg){
       if(refAgg){
         const ref = refAgg.stat[t] && refAgg.stat[t][b];
         if(ref && ref.nPower>0 && s.pHP > ref.pHP){
-          warn = ` <span class="warn-icon" title="Potência em carga parcial (${fmt(s.pHP,1)} wHP) maior que em WOT (${fmt(ref.pHP,1)} wHP) neste bin — fisicamente improvável para motor aspirado. Provável contaminação por inclinação de pista (acelerômetro sem referência de nível) ou transição não filtrada, não um resultado real. Trate com desconfiança.">⚠</span>`;
+          const gradeNote = !isNaN(s.grade) ? ` Rampa medida (dashboard) nesse trecho: ${fmt(s.grade,1)}% (${s.grade<0?'descida':'subida'}).` : ' Sem cobertura de dashboard/altitude para confirmar rampa nesse trecho.';
+          warn = ` <span class="warn-icon" title="Potência em carga parcial (${fmt(s.pHP,1)} wHP) maior que em WOT (${fmt(ref.pHP,1)} wHP) neste bin — fisicamente improvável para motor aspirado.${gradeNote} Provável contaminação por inclinação de pista ou transição não filtrada, não um resultado real. Trate com desconfiança.">⚠</span>`;
         }
       }
       return `<td${cls}>${fmt(s.pHP,1)} wHP / ${fmt(s.torqueNm,1)} N·m <span class="badge ${conf}">n=${s.nPower}</span>${warn}</td>`;
@@ -1409,14 +1605,14 @@ function renderQCTab(fileResults){
 // ---------- export ----------
 document.getElementById('btnExportCsv').addEventListener('click', ()=>{
   if(!aggregated) return;
-  const header = 'regime,bin_rpm,mapa,n,escore,rpi_bruto,rpi_contraido,aep_bruto,aep_contraido,n_power,potencia_whp,torque_nm,lambda_medio,gft_medio,fct_medio,inj_medio,confianca,confianca_potencia\n';
+  const header = 'regime,bin_rpm,mapa,n,escore,rpi_bruto,rpi_contraido,aep_bruto,aep_contraido,n_power,potencia_whp,torque_nm,lambda_medio,gft_medio,fct_medio,inj_medio,rampa_pct,confianca,confianca_potencia\n';
   function dump(agg, regime){
     const {tags, bins, stat} = agg;
     let out = '';
     bins.forEach(b=>{
       tags.forEach(t=>{
         const s = stat[t][b];
-        out += [regime, b, t, s.n, s.score, s.rpi, s.rpiShrunk, s.aep, s.aepShrunk, s.nPower, s.pHP, s.torqueNm, s.lambda, s.gft, s.fct, s.inj, s.confidence, s.confidencePower]
+        out += [regime, b, t, s.n, s.score, s.rpi, s.rpiShrunk, s.aep, s.aepShrunk, s.nPower, s.pHP, s.torqueNm, s.lambda, s.gft, s.fct, s.inj, s.grade, s.confidence, s.confidencePower]
           .map(v=>v===undefined||v===null||(typeof v==='number'&&isNaN(v))?'':v).join(',')+'\n';
       });
     });
