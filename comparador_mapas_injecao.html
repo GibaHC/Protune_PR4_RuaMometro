@@ -267,12 +267,12 @@
         <div class="field">
           <label>Crr — rolamento</label>
           <input type="number" id="p_crr" value="0.015" step="0.001">
-          <div class="note">estimado — impacto pequeno no resultado</div>
+          <div class="note">estimado — usado como F_rolamento = Crr×massa×9,80665; impacto pequeno no resultado comparado a arrasto e inércia</div>
         </div>
         <div class="field">
           <label>Densidade do ar ρ (kg/m³)</label>
           <input type="number" id="p_rho" value="1.112" step="0.001">
-          <div class="note">Brasília ~1000m, referência fixa</div>
+          <div class="note">Brasília ~1000m, referência fixa — usada no termo de arrasto F_arrasto = 0,5×ρ×Cx·A×v²</div>
         </div>
         <div class="field">
           <label>Unidade de "Acceleration" no log</label>
@@ -287,35 +287,44 @@
 
     <div class="subgrp">
       <h3>Pneu &amp; transmissão</h3>
+      <div class="note" style="color:var(--dimmer); font-size:11px; margin-bottom:10px;">
+        Usados apenas para derivar velocidade quando GPS Speed está ausente ou inválido: v = (RPM ÷ (marcha × diferencial)) × 2π×raio ÷ 60. Quando GPS Speed é válido, essas relações não entram no cálculo de potência — só na calibração (seção 05), que sempre deriva por RPM/marcha.
+      </div>
       <div class="grid-params">
         <div class="field">
           <label>Raio do pneu (m)</label>
           <input type="number" id="p_tire" value="0.2978" step="0.0001">
+          <div class="note">raio dinâmico efetivo (195/55 R15) — usado na conversão RPM→velocidade acima</div>
         </div>
         <div class="field">
           <label>Relação diferencial</label>
           <input type="number" id="p_diff" value="3.765" step="0.001">
-          <div class="note">17/64 de ficha — usada só quando a velocidade precisa ser derivada de RPM+marcha (sem GPS Speed válido)</div>
+          <div class="note">17/64 de ficha, confirmada por contagem física de dentes — usada só quando a velocidade precisa ser derivada de RPM+marcha (sem GPS Speed válido)</div>
         </div>
         <div class="field">
           <label>Marcha 1ª</label>
           <input type="number" id="p_g1" value="3.417" step="0.001">
+          <div class="note">relação de câmbio MA5, 1ª marcha</div>
         </div>
         <div class="field">
           <label>Marcha 2ª</label>
           <input type="number" id="p_g2" value="1.810" step="0.001">
+          <div class="note">relação de câmbio MA5, 2ª marcha</div>
         </div>
         <div class="field">
           <label>Marcha 3ª</label>
           <input type="number" id="p_g3" value="1.270" step="0.001">
+          <div class="note">relação de câmbio MA5, 3ª marcha — a mesma usada no ensaio de dyno de referência</div>
         </div>
         <div class="field">
           <label>Marcha 4ª</label>
           <input type="number" id="p_g4" value="0.975" step="0.001">
+          <div class="note">relação de câmbio MA5, 4ª marcha</div>
         </div>
         <div class="field">
           <label>Marcha 5ª</label>
           <input type="number" id="p_g5" value="0.767" step="0.001">
+          <div class="note">relação de câmbio MA5, 5ª marcha</div>
         </div>
       </div>
     </div>
@@ -323,10 +332,22 @@
     <div class="subgrp">
       <h3>Filtro de anomalia de ET</h3>
       <div class="grid-params">
-        <div class="field"><label>ΔET máx por amostra (°C)</label><input type="number" id="p_etdelta" value="4"></div>
-        <div class="field"><label>ET mínimo válido (°C)</label><input type="number" id="p_etmin" value="15"></div>
-        <div class="field"><label>ET máximo válido (°C)</label><input type="number" id="p_etmax" value="105"></div>
-        <div class="field"><label>Janela de expansão (amostras)</label><input type="number" id="p_etwindow" value="51"></div>
+        <div class="field">
+          <label>ΔET máx por amostra (°C)</label><input type="number" id="p_etdelta" value="4">
+          <div class="note">amostra descartada se |ET(i)−ET(i−1)| exceder este valor entre amostras consecutivas — indica leitura de sensor inconsistente ou transição térmica não física, não uma variação real de temperatura de motor</div>
+        </div>
+        <div class="field">
+          <label>ET mínimo válido (°C)</label><input type="number" id="p_etmin" value="15">
+          <div class="note">abaixo disso, a compensação por ET da própria ECU (Fuel Comp Engine Temperature) ainda pode estar ativa de forma não desprezível, distorcendo CVE/lambda de forma que não reflete o mapa de injeção em regime aquecido</div>
+        </div>
+        <div class="field">
+          <label>ET máximo válido (°C)</label><input type="number" id="p_etmax" value="105">
+          <div class="note">acima disso, risco de superaquecimento/proteção térmica ativa (enriquecimento de proteção), que mascara a comparação entre mapas</div>
+        </div>
+        <div class="field">
+          <label>Janela de expansão (amostras)</label><input type="number" id="p_etwindow" value="51">
+          <div class="note">amostras vizinhas a uma anomalia de ET (para os dois lados) também são descartadas — a causa de uma anomalia térmica (ex. sensor, transiente) tende a persistir por mais de uma amostra isolada</div>
+        </div>
       </div>
     </div>
 
@@ -336,12 +357,16 @@
         <div class="field">
           <label>Limiar de WOT (TP % ou Pedal %)</label>
           <input type="number" id="p_wot" value="85">
-          <div class="note">estimado — usa TP TP1L; cai para Pedal PP1 se TP ausente</div>
+          <div class="note">estimado — usa Throttle Position TP TP1L; cai para Pedal 1 Position PP1 amostra a amostra se TP estiver ausente no log</div>
         </div>
-        <div class="field"><label>Tamanho do bin de RPM</label><input type="number" id="p_bin" value="500"></div>
+        <div class="field">
+          <label>Tamanho do bin de RPM</label><input type="number" id="p_bin" value="500">
+          <div class="note">amostras são agrupadas em faixas de RPM deste tamanho antes de qualquer estatística (escore, potência, torque) — bin menor dá mais resolução no eixo RPM mas reduz o n por bin, o que reduz a confiança de cada ponto</div>
+        </div>
         <div class="field">
           <label>Lambda alvo (λ_target)</label>
           <input type="number" id="p_lambdatarget" value="0.84" step="0.01">
+          <div class="note">usado no cálculo de AEP (proxy de eficiência de atomização) = CVE/(λ/λ_alvo). Só entra em uso quando a fonte abaixo é "valor fixo", ou como reserva quando o canal do log está ausente ou zerado numa amostra</div>
         </div>
         <div class="field">
           <label>Fonte do λ_target</label>
@@ -349,6 +374,7 @@
             <option value="fixed">Valor fixo acima</option>
             <option value="log" selected>Canal "Lambda Target" do log</option>
           </select>
+          <div class="note">"canal do log" usa o Lambda Target reportado pela própria ECU amostra a amostra (acompanha as compensações do mapa, ex. por RPM/carga); cai automaticamente para o valor fixo acima se o canal estiver ausente do arquivo ou zerado numa amostra específica</div>
         </div>
       </div>
     </div>
@@ -423,6 +449,16 @@
     </div>
 
     <div class="subgrp">
+      <h3>Correção de rampa (m·g·sen θ)</h3>
+      <div class="grid-params">
+        <div class="field">
+          <label><input type="checkbox" id="p_gradecorrection" checked style="width:auto;margin-right:6px;vertical-align:middle;">Aplicar correção de rampa na potência estimada</label>
+          <div class="note">F_tração = m·a + arrasto + rolamento + m·g·sen(θ). O termo de rampa (θ = inclinação da pista) soma força em subida e subtrai em descida, corrigindo o viés de um canal "Acceleration" que mede aceleração cinemática do solo (confirmado: zera com o carro parado, mesmo em ladeira — não é força específica bruta de acelerômetro, que cancelaria a rampa sozinha). Aplicado nos dois regimes (WOT e carga parcial), só em amostras com cobertura de log de dashboard (altitude) dentro da tolerância — sem cobertura, o cálculo permanece sem correção. Ligado por padrão. Teste com dados reais de 27-28/08: moveu a estimativa na direção fisicamente correta (reduziu excesso em trecho de descida, aumentou em trecho de subida), mas não fechou sozinho as inconsistências de carga parcial > WOT observadas — ainda pode sobrar contaminação de transição ou variância de amostra pequena.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="subgrp">
       <h3>Peso do escore composto</h3>
       <div class="grid-params">
         <div class="field">
@@ -443,11 +479,17 @@
     <div class="subgrp">
       <h3>Confiança (nº de amostras por bin)</h3>
       <div class="grid-params">
-        <div class="field"><label>Mínimo p/ confiança Alta</label><input type="number" id="p_confhigh" value="50"></div>
-        <div class="field"><label>Mínimo p/ confiança Média</label><input type="number" id="p_confmed" value="20"></div>
         <div class="field">
-          <label><input type="checkbox" id="p_hideLowConf" style="width:auto;margin-right:6px;vertical-align:middle;">Ocultar bins de confiança Baixa nos gráficos</label>
-          <div class="note">continuam na tabela (com o badge de n/confiança), só saem da linha do gráfico — evita que 2-3 amostras balancem visualmente a curva</div>
+          <label>Mínimo p/ confiança Alta</label><input type="number" id="p_confhigh" value="50">
+          <div class="note">n de amostras no bin ≥ este valor → badge "Alta"</div>
+        </div>
+        <div class="field">
+          <label>Mínimo p/ confiança Média</label><input type="number" id="p_confmed" value="20">
+          <div class="note">n abaixo do valor de "Alta" e ≥ este valor → badge "Média"; abaixo disso → "Baixa". Este limiar (não-Baixa) também é o que decide se um mapa pode ser apontado como "melhor potência" no alerta de inconsistência da aba de carga parcial, e é o valor padrão de n₀ na contração do escore (seção acima) — mesmo número, dois usos diferentes, porque é o ponto que este projeto tratou como "amostra suficiente para não ser ruído puro"</div>
+        </div>
+        <div class="field">
+          <label><input type="checkbox" id="p_hideLowConf" checked style="width:auto;margin-right:6px;vertical-align:middle;">Ocultar bins de confiança Baixa nos gráficos</label>
+          <div class="note">o valor de cada bin continua na tabela (com o badge de n/confiança visível), só sai do traçado da linha do gráfico — quando ligado, a linha mostra uma quebra visível nesses pontos em vez de interpolar por cima, para não passar a impressão de tendência sustentada por 2-3 amostras. Ligado por padrão.</div>
         </div>
       </div>
     </div>
@@ -558,18 +600,41 @@
       Busca em grade para ajustar Cx·A e o fator de inércia até a potência estimada bater com a referência do dyno, na marcha usada no ensaio. Isola automaticamente amostras WOT na marcha informada, dentro do mapa/config escolhido.
     </div>
     <div class="grid-params">
-      <div class="field"><label>Mapa/config de referência</label><select id="c_tag"></select></div>
-      <div class="field"><label>Marcha usada no dyno</label><input type="number" id="c_gear" value="3"></div>
-      <div class="field"><label>P_dyno_max (wHP)</label><input type="number" id="c_pdyno" value="105.22" step="0.01"></div>
-      <div class="field"><label>RPM_Pmax</label><input type="number" id="c_rpmP" value="5000"></div>
-      <div class="field"><label>T_dyno_max (kgf·m)</label><input type="number" id="c_tdyno" value="16.22" step="0.01"></div>
-      <div class="field"><label>RPM_Tmax (centro)</label><input type="number" id="c_rpmT" value="3250"></div>
-      <div class="field"><label>Tolerância de RPM (±)</label><input type="number" id="c_rpmtol" value="300"></div>
+      <div class="field">
+        <label>Mapa/config de referência</label><select id="c_tag"></select>
+        <div class="note">busca só entre as amostras deste mapa/tag, na marcha informada abaixo — normalmente o mapa `base`, por ser o que estava no carro no ensaio de dyno</div>
+      </div>
+      <div class="field">
+        <label>Marcha usada no dyno</label><input type="number" id="c_gear" value="3">
+        <div class="note">filtra amostras WOT com Analyzer Calculate Gear igual a este valor — precisa bater com a marcha real usada no rolo, senão a relação de câmbio errada entra na conta</div>
+      </div>
+      <div class="field">
+        <label>P_dyno_max (wHP)</label><input type="number" id="c_pdyno" value="105.22" step="0.01">
+        <div class="note">potência de referência medida no dinamômetro (potência na roda), alvo que a busca em grade tenta reproduzir</div>
+      </div>
+      <div class="field">
+        <label>RPM_Pmax</label><input type="number" id="c_rpmP" value="5000">
+        <div class="note">RPM do motor onde P_dyno_max foi medida — a busca compara a potência estimada dentro de ±tolerância de RPM ao redor deste valor</div>
+      </div>
+      <div class="field">
+        <label>T_dyno_max (kgf·m)</label><input type="number" id="c_tdyno" value="16.22" step="0.01">
+        <div class="note">torque de referência do dyno, convertido internamente para N·m (×9,80665) para comparar com o torque estimado (T = P_kW×9549/RPM)</div>
+      </div>
+      <div class="field">
+        <label>RPM_Tmax (centro)</label><input type="number" id="c_rpmT" value="3250">
+        <div class="note">RPM do motor onde T_dyno_max foi medido — mesma lógica de tolerância do RPM_Pmax acima</div>
+      </div>
+      <div class="field">
+        <label>Tolerância de RPM (±)</label><input type="number" id="c_rpmtol" value="300">
+        <div class="note">janela ao redor de RPM_Pmax/RPM_Tmax usada para selecionar amostras de comparação — maior tolerância dá mais amostras mas compara pontos de RPM mais distantes do alvo exato</div>
+      </div>
       <div class="field"><label>Cx·A: mín / máx / passo</label>
         <div class="row"><input type="number" id="c_cda_min" value="0.70" step="0.01"><input type="number" id="c_cda_max" value="0.90" step="0.01"><input type="number" id="c_cda_step" value="0.01" step="0.01"></div>
+        <div class="note">faixa e passo da busca em grade para o coeficiente de arrasto (mesma variável de "Cx·A — arrasto" na seção 02) — a busca testa cada combinação com o fator de inércia abaixo e reporta a de menor erro</div>
       </div>
       <div class="field"><label>Inércia: mín / máx / passo</label>
         <div class="row"><input type="number" id="c_in_min" value="1.05" step="0.01"><input type="number" id="c_in_max" value="1.15" step="0.01"><input type="number" id="c_in_step" value="0.01" step="0.01"></div>
+        <div class="note">faixa e passo da busca em grade para o fator de inércia rotativa (mesma variável da seção 02) — grade de N×M combinações, custo cresce com o produto dos dois tamanhos de passo</div>
       </div>
     </div>
     <div class="row" style="margin-top:14px;">
@@ -1046,6 +1111,7 @@ function getParams(){
     speedJumpWindow: parseInt(document.getElementById('p_speedjumpwindow').value),
     tpMaxDelta: parseFloat(document.getElementById('p_tpjump').value),
     tpJumpWindow: parseInt(document.getElementById('p_tpjumpwindow').value),
+    applyGradeCorrection: document.getElementById('p_gradecorrection').checked,
     binSize: parseFloat(document.getElementById('p_bin').value),
     lambdaTarget: parseFloat(document.getElementById('p_lambdatarget').value),
     lambdaSrc: document.getElementById('p_lambdasrc').value,
@@ -1182,6 +1248,12 @@ function processFile(rec, params, dashTimeline){
       aep = cve/(lambda/lambdaTarget);
     }
 
+    let grade = NaN;
+    if(dashTimeline && ecuAbsTime && !isNaN(ecuAbsTime[i])){
+      const g = dashTimeline.gradeAt(ecuAbsTime[i]);
+      if(!isNaN(g)) grade = g;
+    }
+
     let pHP = NaN, torqueNm = NaN;
     if(rec.hasPowerChannels && rec.usePower){
       let a = num(rows[i], idx.accel);
@@ -1197,20 +1269,21 @@ function processFile(rec, params, dashTimeline){
         if(gr>0 && !isNaN(rpm)) v = (rpm/(gr*params.diffRatio))*(2*Math.PI*params.tireRadius)/60;
       }
       if(!isNaN(v) && v>0 && !isNaN(a)){
-        const F = params.mass*params.inertiaFactor*a
+        let F = params.mass*params.inertiaFactor*a
                 + 0.5*params.rho*params.cda*v*v
                 + params.crr*params.mass*gAll;
+        // Correção de rampa: F_tração = m·a + arrasto + rolamento + m·g·sen(θ). Só aplicada
+        // quando há cobertura de altitude (dashboard) e a opção está ligada — ver nota na
+        // seção de parâmetros sobre por que isso não é automático.
+        if(params.applyGradeCorrection && !isNaN(grade)){
+          const theta = Math.atan(grade/100);
+          F += params.mass*gAll*Math.sin(theta);
+        }
         const pW = F*v;
         pHP = pW/745.7;
         const pkW = pW/1000;
         torqueNm = pkW*9549/rpm;
       }
-    }
-
-    let grade = NaN;
-    if(dashTimeline && ecuAbsTime && !isNaN(ecuAbsTime[i])){
-      const g = dashTimeline.gradeAt(ecuAbsTime[i]);
-      if(!isNaN(g)) grade = g;
     }
 
     return {
