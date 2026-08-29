@@ -865,6 +865,33 @@ const DASH_MIN_SATS = 4;
 const DASH_SMOOTH_WINDOW = 25; // pontos, ~0.5s a 50Hz
 const DASH_MAX_GAP_S = 5;      // além disso, considera sem cobertura
 
+// Canais que ainda não existem populados na rede CAN do carro (sensores em instalação:
+// rotação no câmbio para Vehicle Speed, MAF, pressão de óleo/combustível). A ferramenta já
+// reconhece a coluna se ela existir no arquivo e reporta se tem dado real ou está zerada —
+// não usa nada disso em nenhum cálculo ainda. Quando a rede CAN for populada de verdade,
+// esses canais passam a aparecer como "disponível" aqui sem precisar mexer no código.
+const FUTURE_CHANNELS = [
+  {key:'vehicleSpeed', col:'Vehicle Speed', label:'Vehicle Speed (roda)'},
+  {key:'gearPosition', col:'Gear Position', label:'Gear Position (sensor)'},
+  {key:'maf', col:'MAF Air Flow Rate', label:'MAF Air Flow Rate'},
+  {key:'fuelPressEcu', col:'Fuel Pressure ECU', label:'Fuel Pressure ECU'},
+  {key:'fuelPressTdl', col:'Fuel Pressure TDL', label:'Fuel Pressure TDL'},
+  {key:'oilTemp', col:'Engine Oil Temperature', label:'Engine Oil Temperature'},
+];
+
+function checkFutureChannels(rec){
+  return FUTURE_CHANNELS.map(fc=>{
+    const idx = rec.headers.indexOf(fc.col);
+    if(idx<0) return {...fc, present:false, populated:false, n:0};
+    let n=0;
+    for(let i=0;i<rec.rows.length;i++){
+      const v = num(rec.rows[i], idx);
+      if(!isNaN(v) && v!==0){ n++; }
+    }
+    return {...fc, present:true, populated:n>0, n};
+  });
+}
+
 function summarizeDashFile(rec){
   const idx = {
     dt: rec.headers.indexOf('Datalog Time'), date: rec.headers.indexOf('GPS UTC Date'),
@@ -888,7 +915,8 @@ function summarizeDashFile(rec){
     sessionCount, validN,
     coveragePct: rec.rows.length ? (100*validN/rec.rows.length) : 0,
     altMin: isFinite(altMin)?altMin:NaN, altMax: isFinite(altMax)?altMax:NaN,
-    firstT, lastT
+    firstT, lastT,
+    futureChannels: checkFutureChannels(rec)
   };
 }
 
@@ -902,12 +930,19 @@ function renderDashFileTable(){
   const empty = document.getElementById('noDashFiles');
   if(!dashFiles.length){ wrap.style.display='none'; empty.style.display='block'; return; }
   wrap.style.display='block'; empty.style.display='none';
-  let h = '<table><thead><tr><th>Arquivo</th><th>Linhas</th><th>Sessões</th><th>Cobertura alt.</th><th>Faixa de altitude</th><th>Período (UTC)</th><th></th></tr></thead><tbody>';
+  let h = '<table><thead><tr><th>Arquivo</th><th>Linhas</th><th>Sessões</th><th>Cobertura alt.</th><th>Faixa de altitude</th><th>Período (UTC)</th><th>Canais futuros (leitura, sem uso no cálculo)</th><th></th></tr></thead><tbody>';
   dashFiles.forEach(rec=>{
     const s = rec.summary;
+    const fcBadges = s.futureChannels.map(fc=>{
+      if(!fc.present) return '';
+      const cls = fc.populated ? 'b-ok' : 'b-warn';
+      const label = fc.populated ? `${fc.label}: ${fc.n} amostras` : `${fc.label}: aguardando`;
+      return `<span class="badge ${cls}" style="margin:1px;" title="${fc.populated?'coluna presente com dado real':'coluna presente no arquivo mas ainda zerada/sem leitura — sensor em instalação'}">${label}</span>`;
+    }).join(' ');
     h += `<tr><td>${rec.name.length>28?rec.name.slice(0,26)+'…':rec.name}</td><td>${rec.N}</td><td>${s.sessionCount}</td>
       <td>${fmt(s.coveragePct,0)}%</td><td>${fmt(s.altMin,0)}–${fmt(s.altMax,0)} m</td>
       <td style="white-space:normal;font-size:11px;">${fmtDateTime(s.firstT)} → ${fmtDateTime(s.lastT)}</td>
+      <td style="white-space:normal;">${fcBadges || '<span style="color:var(--dimmer)">nenhuma coluna reconhecida</span>'}</td>
       <td><button data-id="${rec.id}" class="btn secondary removeDashBtn" style="padding:4px 10px;font-size:11px;">remover</button></td></tr>`;
   });
   h += '</tbody></table>';
