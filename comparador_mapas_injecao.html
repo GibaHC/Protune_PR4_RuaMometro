@@ -257,23 +257,18 @@
         </div>
         <div class="field">
           <label>Fator de inércia rotativa</label>
-          <input type="number" id="p_inertia" value="1.12" step="0.01">
+          <input type="number" id="p_inertia" value="1.52" step="0.01">
           <div class="note">calibrado contra o dyno (12/08, motor novo) — ver seção 05</div>
         </div>
         <div class="field">
           <label>Cx·A — arrasto (m²)</label>
-          <input type="number" id="p_cda" value="0.80" step="0.01">
+          <input type="number" id="p_cda" value="0.73" step="0.01">
           <div class="note">calibrado contra o dyno (12/08, motor novo) — ver seção 05</div>
         </div>
         <div class="field">
           <label>Crr — rolamento</label>
           <input type="number" id="p_crr" value="0.015" step="0.001">
           <div class="note">estimado — usado como F_rolamento = Crr×massa×9,80665; impacto pequeno no resultado comparado a arrasto e inércia</div>
-        </div>
-        <div class="field">
-          <label>Densidade do ar ρ (kg/m³) — fallback</label>
-          <input type="number" id="p_rho" value="1.112" step="0.001">
-          <div class="note">só usado quando não é possível calcular por altitude+IAT (ex.: arquivo sem canal de IAT). Quando possível, a ferramenta calcula ρ amostra a amostra a partir da altitude (seção abaixo) e da temperatura externa estimada — ver "Altitude &amp; densidade do ar"</div>
         </div>
         <div class="field">
           <label>Unidade de "Acceleration" no log</label>
@@ -289,22 +284,27 @@
     <div class="subgrp">
       <h3>Altitude &amp; densidade do ar</h3>
       <div class="note" style="color:var(--dimmer); font-size:11px; margin-bottom:10px;">
-        ρ = P/(Rd×T), calculado por amostra (ar seco, sem umidade — umidade só entra na calibração, seção 05). Pressão vem da altitude via fórmula barométrica padrão; temperatura vem do IAT com piso de janela móvel, para não confundir calor retido no cofre do motor (parado/lenta) com temperatura ambiente real. Só afeta o termo de arrasto — não toca em CVE, lambda ou qualquer cálculo de mistura, já que a própria ECU já tem compensação barométrica e por IAT embutidas na malha de injeção.
+        ρ = P/(Rd×T), calculado por amostra (ar seco, sem umidade — umidade só entra na calibração, seção 05). Pressão vem em 3 níveis de prioridade: 1) altitude do GPS por amostra (checkbox abaixo), 2) pressão barométrica medida no pré-partida de cada arquivo (RPM=0, sensor de MAP como barômetro — mais preciso que altitude assumida, porque é pressão real do dia), 3) altitude fixa abaixo, só como último recurso. Temperatura vem do IAT com piso de janela móvel, para não confundir calor retido no cofre do motor (parado/lenta) com temperatura ambiente real. Só afeta o termo de arrasto — não toca em CVE, lambda ou qualquer cálculo de mistura, já que a própria ECU já tem compensação barométrica e por IAT embutidas na malha de injeção. A pressão detectada em cada arquivo aparece na aba de QC (seção 03).
       </div>
       <div class="grid-params">
         <div class="field">
           <label>Altitude média do projeto (m)</label>
           <input type="number" id="p_altitude" value="1000" step="10">
-          <div class="note">valor único usado para todos os mapas/arquivos — Brasília ~1000m. Vira a pressão via fórmula barométrica padrão: P = P₀×(1 − 0,0065×h/288,15)^5,2559, P₀=101325 Pa</div>
+          <div class="note">último recurso — só usada quando não há cobertura de GPS nem pressão pré-partida detectável no arquivo. Brasília ~1000m. Vira pressão via fórmula barométrica padrão: P = P₀×(1 − 0,0065×h/288,15)^5,2559, P₀=101325 Pa</div>
         </div>
         <div class="field">
           <label><input type="checkbox" id="p_usegpsalt" checked style="width:auto;margin-right:6px;vertical-align:middle;">Usar altitude do GPS quando disponível</label>
-          <div class="note">quando ligado, substitui a altitude fixa acima pela altitude interpolada do log de dashboard (seção 01) na amostra específica, sempre que houver cobertura dentro da tolerância — cai para a altitude fixa fora da cobertura ou sem nenhum log de dashboard carregado</div>
+          <div class="note">quando ligado, tem prioridade sobre a pressão pré-partida e sobre a altitude fixa: usa a altitude interpolada do log de dashboard (seção 01) amostra a amostra, sempre que houver cobertura dentro da tolerância</div>
         </div>
         <div class="field">
           <label>Janela de temperatura externa (minutos)</label>
           <input type="number" id="p_iatwindow" value="15" step="1">
           <div class="note">temperatura usada na densidade = menor IAT dentro desta janela móvel retroativa (em tempo real via Datalog Time, não em nº de amostras — necessário porque ECU e dashboard têm taxas de amostragem diferentes). Evita que o calor retido no cofre do motor com o carro parado/lenta (ex.: saindo de um semáforo) seja lido como se fosse a temperatura ambiente real, que é sempre igual ou menor. Ajustável porque o tempo de dissipação de calor do cofre não foi medido ainda — 15 min é ponto de partida, não valor validado</div>
+        </div>
+        <div class="field">
+          <label>Densidade do ar ρ (kg/m³) — fallback</label>
+          <input type="number" id="p_rho" value="1.001" step="0.001">
+          <div class="note">só usado quando não é possível calcular por altitude+IAT (ex.: arquivo sem canal de IAT) — nesse caso, todas as amostras desse arquivo usam este valor fixo em vez do cálculo por amostra descrito na nota do grupo</div>
         </div>
       </div>
     </div>
@@ -318,7 +318,7 @@
         <div class="field">
           <label>Raio do pneu (m)</label>
           <input type="number" id="p_tire" value="0.2978" step="0.0001">
-          <div class="note">raio dinâmico efetivo (195/55 R15) — usado na conversão RPM→velocidade acima</div>
+          <div class="note">raio dinâmico efetivo (195/55 R15) — usado na conversão RPM→velocidade: v = (RPM ÷ (marcha × diferencial)) × 2π×raio ÷ 60</div>
         </div>
         <div class="field">
           <label>Relação diferencial</label>
@@ -390,7 +390,7 @@
         <div class="field">
           <label>Lambda alvo (λ_target)</label>
           <input type="number" id="p_lambdatarget" value="0.84" step="0.01">
-          <div class="note">usado no cálculo de AEP (proxy de eficiência de atomização) = CVE/(λ/λ_alvo). Só entra em uso quando a fonte abaixo é "valor fixo", ou como reserva quando o canal do log está ausente ou zerado numa amostra</div>
+          <div class="note">usado no cálculo de AEP (proxy de eficiência de atomização) = CVE/(λ/λ_alvo). Só entra em uso quando "Fonte do λ_target" está em "valor fixo", ou como reserva quando o canal do log está ausente ou zerado numa amostra</div>
         </div>
         <div class="field">
           <label>Fonte do λ_target</label>
@@ -398,7 +398,7 @@
             <option value="fixed">Valor fixo acima</option>
             <option value="log" selected>Canal "Lambda Target" do log</option>
           </select>
-          <div class="note">"canal do log" usa o Lambda Target reportado pela própria ECU amostra a amostra (acompanha as compensações do mapa, ex. por RPM/carga); cai automaticamente para o valor fixo acima se o canal estiver ausente do arquivo ou zerado numa amostra específica</div>
+          <div class="note">"canal do log" usa o Lambda Target reportado pela própria ECU amostra a amostra (acompanha as compensações do mapa, ex. por RPM/carga); cai automaticamente para o valor de "Lambda alvo" se o canal estiver ausente do arquivo ou zerado numa amostra específica</div>
         </div>
       </div>
     </div>
@@ -467,7 +467,7 @@
         <div class="field">
           <label>Janela de estabilidade de TP (amostras, olhando pra trás)</label>
           <input type="number" id="p_tpjumpwindow" value="8">
-          <div class="note">tamanho da janela retroativa usada para medir a amplitude acima — pega tanto saltos abruptos quanto lift/retomada graduais de várias amostras (que um filtro de degrau único não pega)</div>
+          <div class="note">tamanho da janela retroativa usada para medir a amplitude de "Variação máxima de TP na janela" — pega tanto saltos abruptos quanto lift/retomada graduais de várias amostras (que um filtro de degrau único não pega)</div>
         </div>
       </div>
     </div>
@@ -477,7 +477,7 @@
       <div class="grid-params">
         <div class="field">
           <label><input type="checkbox" id="p_gradecorrection" checked style="width:auto;margin-right:6px;vertical-align:middle;">Aplicar correção de rampa na potência estimada</label>
-          <div class="note">F_tração = m·a + arrasto + rolamento + m·g·sen(θ). O termo de rampa (θ = inclinação da pista) soma força em subida e subtrai em descida, corrigindo o viés de um canal "Acceleration" que mede aceleração cinemática do solo (confirmado: zera com o carro parado, mesmo em ladeira — não é força específica bruta de acelerômetro, que cancelaria a rampa sozinha). Aplicado nos dois regimes (WOT e carga parcial), só em amostras com cobertura de log de dashboard (altitude) dentro da tolerância — sem cobertura, o cálculo permanece sem correção. Ligado por padrão. Teste com dados reais de 27-28/08: moveu a estimativa na direção fisicamente correta (reduziu excesso em trecho de descida, aumentou em trecho de subida), mas não fechou sozinho as inconsistências de carga parcial > WOT observadas — ainda pode sobrar contaminação de transição ou variância de amostra pequena.</div>
+          <div class="note">F_tração += m·g·sen(θ). Corrige o viés de um canal "Acceleration" que mede aceleração cinemática do solo, não força específica de acelerômetro. Só em amostras com cobertura de altitude (dashboard); sem cobertura, sem correção.</div>
         </div>
       </div>
     </div>
@@ -509,7 +509,7 @@
         </div>
         <div class="field">
           <label>Mínimo p/ confiança Média</label><input type="number" id="p_confmed" value="20">
-          <div class="note">n abaixo do valor de "Alta" e ≥ este valor → badge "Média"; abaixo disso → "Baixa". Este limiar (não-Baixa) também é o que decide se um mapa pode ser apontado como "melhor potência" no alerta de inconsistência da aba de carga parcial, e é o valor padrão de n₀ na contração do escore (seção acima) — mesmo número, dois usos diferentes, porque é o ponto que este projeto tratou como "amostra suficiente para não ser ruído puro"</div>
+          <div class="note">n abaixo do valor de "Alta" e ≥ este valor → badge "Média"; abaixo disso → "Baixa". Este limiar (não-Baixa) também é o que decide se um mapa pode ser apontado como "melhor potência" no alerta de inconsistência da aba de carga parcial, e é o valor padrão de n₀ na contração do escore (grupo "Peso do escore composto") — mesmo número, dois usos diferentes, porque é o ponto que este projeto tratou como "amostra suficiente para não ser ruído puro"</div>
         </div>
         <div class="field">
           <label><input type="checkbox" id="p_hideLowConf" checked style="width:auto;margin-right:6px;vertical-align:middle;">Ocultar bins de confiança Baixa nos gráficos</label>
@@ -533,7 +533,7 @@
         <div class="field">
           <label>% de corte de cada lado (trimmed mean)</label>
           <input type="number" id="p_trimpct" value="10" step="1">
-          <div class="note">só usado se o método acima for "média aparada" — com n=10, 10% corta 1 amostra de cada ponta; com n&lt;10 não corta nada</div>
+          <div class="note">só usado se "Método" estiver em "média aparada" — com n=10, 10% corta 1 amostra de cada ponta; com n&lt;10 não corta nada</div>
         </div>
       </div>
     </div>
@@ -626,7 +626,7 @@
     <div class="grid-params">
       <div class="field">
         <label>Mapa/config de referência</label><select id="c_tag"></select>
-        <div class="note">busca só entre as amostras deste mapa/tag, na marcha informada abaixo — normalmente o mapa `base`, por ser o que estava no carro no ensaio de dyno</div>
+        <div class="note">busca só entre as amostras deste mapa/tag, na marcha informada em "Marcha usada no dyno" — normalmente o mapa `base`, por ser o que estava no carro no ensaio de dyno</div>
       </div>
       <div class="field">
         <label>Marcha usada no dyno</label><input type="number" id="c_gear" value="3">
@@ -638,7 +638,7 @@
       </div>
       <div class="field">
         <label>Temperatura do ensaio (°C)</label><input type="number" id="c_tc" value="30.9" step="0.1">
-        <div class="note">temperatura do ar medida no dia do dyno, usada junto com a pressão acima em ρ = P/(Rd×T)</div>
+        <div class="note">temperatura do ar medida no dia do dyno, usada junto com "Pressão do ensaio" em ρ = P/(Rd×T)</div>
       </div>
       <div class="field">
         <label>Umidade relativa do ensaio (%)</label><input type="number" id="c_rh" value="35.1" step="0.1">
@@ -658,18 +658,18 @@
       </div>
       <div class="field">
         <label>RPM_Tmax (centro)</label><input type="number" id="c_rpmT" value="3250">
-        <div class="note">RPM do motor onde T_dyno_max foi medido — mesma lógica de tolerância do RPM_Pmax acima</div>
+        <div class="note">RPM do motor onde T_dyno_max foi medido — mesma lógica de tolerância de "RPM_Pmax"</div>
       </div>
       <div class="field">
         <label>Tolerância de RPM (±)</label><input type="number" id="c_rpmtol" value="300">
         <div class="note">janela ao redor de RPM_Pmax/RPM_Tmax usada para selecionar amostras de comparação — maior tolerância dá mais amostras mas compara pontos de RPM mais distantes do alvo exato</div>
       </div>
       <div class="field"><label>Cx·A: mín / máx / passo</label>
-        <div class="row"><input type="number" id="c_cda_min" value="0.70" step="0.01"><input type="number" id="c_cda_max" value="0.90" step="0.01"><input type="number" id="c_cda_step" value="0.01" step="0.01"></div>
-        <div class="note">faixa e passo da busca em grade para o coeficiente de arrasto (mesma variável de "Cx·A — arrasto" na seção 02) — a busca testa cada combinação com o fator de inércia abaixo e reporta a de menor erro</div>
+        <div class="row"><input type="number" id="c_cda_min" value="0.70" step="0.01"><input type="number" id="c_cda_max" value="1.40" step="0.01"><input type="number" id="c_cda_step" value="0.01" step="0.01"></div>
+        <div class="note">faixa e passo da busca em grade para o coeficiente de arrasto (mesma variável de "Cx·A — arrasto" na seção 02) — a busca testa cada combinação com a faixa de "Inércia" ao lado e reporta a de menor erro</div>
       </div>
       <div class="field"><label>Inércia: mín / máx / passo</label>
-        <div class="row"><input type="number" id="c_in_min" value="1.05" step="0.01"><input type="number" id="c_in_max" value="1.15" step="0.01"><input type="number" id="c_in_step" value="0.01" step="0.01"></div>
+        <div class="row"><input type="number" id="c_in_min" value="1.01" step="0.01"><input type="number" id="c_in_max" value="1.60" step="0.01"><input type="number" id="c_in_step" value="0.01" step="0.01"></div>
         <div class="note">faixa e passo da busca em grade para o fator de inércia rotativa (mesma variável da seção 02) — grade de N×M combinações, custo cresce com o produto dos dois tamanhos de passo</div>
       </div>
     </div>
@@ -907,6 +907,44 @@ function pressureFromAltitude(h){
   const P0=101325, L=0.0065, T0=288.15, g=9.80665, M=0.0289644, Rgas=8.3144598;
   const exp = (g*M)/(Rgas*L); // ~5.2559
   return P0*Math.pow(1-(L*h)/T0, exp); // Pa
+}
+
+// Inverso da fórmula acima — só usado para exibir a altitude implícita da pressão barométrica
+// medida (não entra em nenhum cálculo, é conferência visual pro usuário).
+function altitudeFromPressureKPa(P_kPa){
+  const P0=101325, L=0.0065, T0=288.15, g=9.80665, M=0.0289644, Rgas=8.3144598;
+  const exp = (g*M)/(Rgas*L);
+  return (T0/L)*(1-Math.pow((P_kPa*1000)/P0, 1/exp));
+}
+
+// Pressão barométrica medida pelo próprio sensor de MAP do carro: com o motor desligado
+// (RPM=0) e chave ligada, o coletor de admissão está exposto à pressão atmosférica ambiente
+// (sem o motor puxando vácuo) — o MAP é, nesse instante, um barômetro. Mais preciso que uma
+// altitude fixa assumida, porque captura a pressão real do dia (clima), não só a altitude.
+// Pega o trecho de RPM=0 contíguo a partir do início do arquivo (pré-partida) e usa a mediana
+// dos últimos ~3s desse trecho (mais perto do instante de partida, robusto a ruído).
+function detectPreCrankBaroKPa(rows, idxRpm, idxMap, idxDt){
+  if(idxRpm<0 || idxMap<0) return NaN;
+  let end = 0;
+  while(end<rows.length){
+    const rpm = num(rows[end], idxRpm);
+    if(isNaN(rpm) || rpm>0) break;
+    end++;
+  }
+  if(end<3) return NaN; // trecho curto demais pra confiar
+  let start = 0;
+  if(idxDt>=0){
+    const tEnd = num(rows[end-1], idxDt);
+    start = end-1;
+    while(start>0 && (tEnd - num(rows[start-1], idxDt)) <= 3) start--;
+  } else {
+    start = Math.max(0, end-60);
+  }
+  const vals = [];
+  for(let i=start;i<end;i++){ const v=num(rows[i], idxMap); if(!isNaN(v)) vals.push(v); }
+  if(vals.length<3) return NaN;
+  vals.sort((a,b)=>a-b);
+  return vals[Math.floor(vals.length/2)];
 }
 
 // Pressão de saturação de vapor d'água (Magnus-Tetens), retorna kPa a partir de T em °C.
@@ -1293,10 +1331,16 @@ function processFile(rec, params, dashTimeline){
     ecuAbsTime = buildAbsoluteTimeline(rows, idx.dt, idx.gpsDate, idx.gpsTime, idx.gpsSats, DASH_MIN_SATS).absTime;
   }
 
-  // Densidade do ar por amostra: pressão da altitude (GPS quando disponível e habilitado,
-  // senão a altitude fixa do projeto) + temperatura do piso de IAT numa janela móvel (evita
-  // ler calor retido no cofre do motor como se fosse ambiente). Sem canal de IAT, cai no ρ
-  // fixo de fallback da seção 02 para todas as amostras deste arquivo.
+  // Densidade do ar por amostra: pressão em 3 níveis de prioridade —
+  //  1) altitude do GPS (dashboard), quando disponível e habilitado — mais granular, varia
+  //     amostra a amostra com o terreno percorrido;
+  //  2) pressão barométrica medida no pré-partida deste próprio arquivo (RPM=0), quando
+  //     detectável — constante para o arquivo inteiro, mas é pressão REAL medida naquele dia,
+  //     não uma altitude assumida;
+  //  3) altitude fixa do projeto (fallback genérico), via fórmula barométrica padrão.
+  // + temperatura do piso de IAT numa janela móvel (evita ler calor retido no cofre do motor
+  // como se fosse ambiente). Sem canal de IAT, cai no ρ fixo de fallback da seção 02.
+  const preCrankBaroKPa = detectPreCrankBaroKPa(rows, idx.rpm, idx.map, idx.dt);
   let rhoSample = null;
   if(idx.iat>=0 && idx.dt>=0){
     const dtVals = new Array(N), iatVals = new Array(N);
@@ -1304,13 +1348,16 @@ function processFile(rec, params, dashTimeline){
     const iatFloor = rollingMinByTime(dtVals, iatVals, params.iatWindowMin*60);
     rhoSample = new Array(N);
     for(let i=0;i<N;i++){
-      let altitude = params.avgAltitude;
-      if(params.useGpsAltitude && dashTimeline && ecuAbsTime && !isNaN(ecuAbsTime[i])){
-        const ap = dashTimeline.altAt(ecuAbsTime[i]);
-        if(ap) altitude = ap.alt;
+      let P_kPa;
+      if(params.useGpsAltitude && dashTimeline && ecuAbsTime && !isNaN(ecuAbsTime[i]) && dashTimeline.altAt(ecuAbsTime[i])){
+        P_kPa = pressureFromAltitude(dashTimeline.altAt(ecuAbsTime[i]).alt)/1000;
+      } else if(!isNaN(preCrankBaroKPa)){
+        P_kPa = preCrankBaroKPa;
+      } else {
+        P_kPa = pressureFromAltitude(params.avgAltitude)/1000;
       }
       const tC = iatFloor[i];
-      rhoSample[i] = !isNaN(tC) ? airDensityDry(pressureFromAltitude(altitude)/1000, tC) : params.rho;
+      rhoSample[i] = !isNaN(tC) ? airDensityDry(P_kPa, tC) : params.rho;
     }
   }
 
@@ -1502,7 +1549,7 @@ function processFile(rec, params, dashTimeline){
 
   return {
     fileId:rec.id, fileName:rec.name, tag:rec.tag, N,
-    wotCount, etExcludedCount, loadCount,
+    wotCount, etExcludedCount, loadCount, preCrankBaroKPa,
     hasPowerChannels: rec.hasPowerChannels, usePower: rec.usePower,
     qc: rec.qc, samples: out, samplesPartial: outLoad
   };
@@ -1831,14 +1878,17 @@ function renderLambdaTab(agg, suffix){
 }
 
 function renderQCTab(fileResults){
-  let hQC = '<thead><tr><th>Arquivo</th><th>Mapa</th><th>Linhas</th><th>Excluídas p/ ET</th><th>Amostras WOT</th><th>Amostras carga média</th><th>Potência</th><th>Alertas</th></tr></thead><tbody>';
+  let hQC = '<thead><tr><th>Arquivo</th><th>Mapa</th><th>Linhas</th><th>Excluídas p/ ET</th><th>Amostras WOT</th><th>Amostras carga média</th><th>Pressão pré-partida</th><th>Potência</th><th>Alertas</th></tr></thead><tbody>';
   fileResults.forEach(fr=>{
     const powerStatus = fr.hasPowerChannels
       ? (fr.usePower ? '<span class="badge b-ok">habilitada</span>' : '<span class="badge b-warn">desabilitada</span>')
       : '<span class="badge b-bad">sem canais</span>';
+    const baro = !isNaN(fr.preCrankBaroKPa)
+      ? `${fmt(fr.preCrankBaroKPa,1)} kPa <span class="sub">(≈${fmt(altitudeFromPressureKPa(fr.preCrankBaroKPa),0)}m)</span>`
+      : '<span class="badge b-warn">não detectada</span>';
     hQC += `<tr><td>${fr.fileName}</td><td style="color:${colorForTag(fr.tag)}">${fr.tag}</td>
       <td>${fr.N}</td><td>${fr.etExcludedCount} (${fmt(100*fr.etExcludedCount/fr.N,1)}%)</td>
-      <td>${fr.wotCount}</td><td>${fr.loadCount}</td><td>${powerStatus}</td>
+      <td>${fr.wotCount}</td><td>${fr.loadCount}</td><td>${baro}</td><td>${powerStatus}</td>
       <td>${fr.qc.flags.length? fr.qc.flags.join('; '):'—'}</td></tr>`;
   });
   hQC += '</tbody>';
