@@ -271,9 +271,9 @@
           <div class="note">estimado — usado como F_rolamento = Crr×massa×9,80665; impacto pequeno no resultado comparado a arrasto e inércia</div>
         </div>
         <div class="field">
-          <label>Densidade do ar ρ (kg/m³)</label>
+          <label>Densidade do ar ρ (kg/m³) — fallback</label>
           <input type="number" id="p_rho" value="1.112" step="0.001">
-          <div class="note">Brasília ~1000m, referência fixa — usada no termo de arrasto F_arrasto = 0,5×ρ×Cx·A×v²</div>
+          <div class="note">só usado quando não é possível calcular por altitude+IAT (ex.: arquivo sem canal de IAT). Quando possível, a ferramenta calcula ρ amostra a amostra a partir da altitude (seção abaixo) e da temperatura externa estimada — ver "Altitude &amp; densidade do ar"</div>
         </div>
         <div class="field">
           <label>Unidade de "Acceleration" no log</label>
@@ -282,6 +282,29 @@
             <option value="g" selected>g (9.80665 m/s²)</option>
           </select>
           <div class="note">confirmado — canal do log está em g</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="subgrp">
+      <h3>Altitude &amp; densidade do ar</h3>
+      <div class="note" style="color:var(--dimmer); font-size:11px; margin-bottom:10px;">
+        ρ = P/(Rd×T), calculado por amostra (ar seco, sem umidade — umidade só entra na calibração, seção 05). Pressão vem da altitude via fórmula barométrica padrão; temperatura vem do IAT com piso de janela móvel, para não confundir calor retido no cofre do motor (parado/lenta) com temperatura ambiente real. Só afeta o termo de arrasto — não toca em CVE, lambda ou qualquer cálculo de mistura, já que a própria ECU já tem compensação barométrica e por IAT embutidas na malha de injeção.
+      </div>
+      <div class="grid-params">
+        <div class="field">
+          <label>Altitude média do projeto (m)</label>
+          <input type="number" id="p_altitude" value="1000" step="10">
+          <div class="note">valor único usado para todos os mapas/arquivos — Brasília ~1000m. Vira a pressão via fórmula barométrica padrão: P = P₀×(1 − 0,0065×h/288,15)^5,2559, P₀=101325 Pa</div>
+        </div>
+        <div class="field">
+          <label><input type="checkbox" id="p_usegpsalt" checked style="width:auto;margin-right:6px;vertical-align:middle;">Usar altitude do GPS quando disponível</label>
+          <div class="note">quando ligado, substitui a altitude fixa acima pela altitude interpolada do log de dashboard (seção 01) na amostra específica, sempre que houver cobertura dentro da tolerância — cai para a altitude fixa fora da cobertura ou sem nenhum log de dashboard carregado</div>
+        </div>
+        <div class="field">
+          <label>Janela de temperatura externa (minutos)</label>
+          <input type="number" id="p_iatwindow" value="15" step="1">
+          <div class="note">temperatura usada na densidade = menor IAT dentro desta janela móvel retroativa (em tempo real via Datalog Time, não em nº de amostras — necessário porque ECU e dashboard têm taxas de amostragem diferentes). Evita que o calor retido no cofre do motor com o carro parado/lenta (ex.: saindo de um semáforo) seja lido como se fosse a temperatura ambiente real, que é sempre igual ou menor. Ajustável porque o tempo de dissipação de calor do cofre não foi medido ainda — 15 min é ponto de partida, não valor validado</div>
         </div>
       </div>
     </div>
@@ -610,6 +633,18 @@
         <div class="note">filtra amostras WOT com Analyzer Calculate Gear igual a este valor — precisa bater com a marcha real usada no rolo, senão a relação de câmbio errada entra na conta</div>
       </div>
       <div class="field">
+        <label>Pressão do ensaio (kPa)</label><input type="number" id="c_pkpa" value="87.9" step="0.1">
+        <div class="note">pressão atmosférica medida no dia do dyno — usada para calcular a densidade do ar daquele ensaio específico (ρ_dyno), em vez do ρ fixo/genérico da seção 02. Isso evita calibrar Cx·A/inércia contra uma densidade que não é a do dia real do ensaio</div>
+      </div>
+      <div class="field">
+        <label>Temperatura do ensaio (°C)</label><input type="number" id="c_tc" value="30.9" step="0.1">
+        <div class="note">temperatura do ar medida no dia do dyno, usada junto com a pressão acima em ρ = P/(Rd×T)</div>
+      </div>
+      <div class="field">
+        <label>Umidade relativa do ensaio (%)</label><input type="number" id="c_rh" value="35.1" step="0.1">
+        <div class="note">só usada aqui na calibração (não no cálculo geral dos mapas). Ar úmido é menos denso que ar seco na mesma P/T — a correção usa pressão de vapor saturado (Magnus-Tetens) × UR% para achar a pressão parcial de vapor, e a densidade final é a soma das parcelas de ar seco e vapor</div>
+      </div>
+      <div class="field">
         <label>P_dyno_max (wHP)</label><input type="number" id="c_pdyno" value="105.22" step="0.01">
         <div class="note">potência de referência medida no dinamômetro (potência na roda), alvo que a busca em grade tenta reproduzir</div>
       </div>
@@ -638,6 +673,7 @@
         <div class="note">faixa e passo da busca em grade para o fator de inércia rotativa (mesma variável da seção 02) — grade de N×M combinações, custo cresce com o produto dos dois tamanhos de passo</div>
       </div>
     </div>
+    <div id="calibDensityInfo" class="sub" style="margin-top:8px;"></div>
     <div class="row" style="margin-top:14px;">
       <button class="btn" id="btnCalibrate">Rodar calibração</button>
       <button class="btn secondary" id="btnApplyCalib" disabled>Aplicar melhor resultado aos parâmetros</button>
@@ -860,6 +896,59 @@ function haversineMeters(lat1,lon1,lat2,lon2){
   const dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
   const a=Math.sin(dLat/2)**2+Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
   return 2*R*Math.asin(Math.sqrt(a));
+}
+
+// ---- Densidade do ar: pressão barométrica por altitude + lei dos gases (ar seco/úmido) ----
+const R_DRY = 287.05;   // J/(kg·K)
+const R_VAPOR = 461.5;  // J/(kg·K)
+
+// Atmosfera padrão internacional (ISA), válida na troposfera.
+function pressureFromAltitude(h){
+  const P0=101325, L=0.0065, T0=288.15, g=9.80665, M=0.0289644, Rgas=8.3144598;
+  const exp = (g*M)/(Rgas*L); // ~5.2559
+  return P0*Math.pow(1-(L*h)/T0, exp); // Pa
+}
+
+// Pressão de saturação de vapor d'água (Magnus-Tetens), retorna kPa a partir de T em °C.
+function saturationVaporPressureKPa(tC){
+  return 0.61094*Math.exp((17.625*tC)/(tC+243.04));
+}
+
+// Densidade do ar úmido: soma das parcelas de ar seco e vapor d'água.
+// P_kPa = pressão atmosférica total; tC = temperatura; rhPct = umidade relativa (0-100).
+function airDensityHumid(P_kPa, tC, rhPct){
+  const Tk = tC+273.15;
+  const Psat = saturationVaporPressureKPa(tC);
+  const Pv = (rhPct/100)*Psat;      // kPa
+  const Pd = Math.max(0, P_kPa-Pv); // kPa
+  return (Pd*1000)/(R_DRY*Tk) + (Pv*1000)/(R_VAPOR*Tk);
+}
+
+// Densidade do ar seco (sem correção de umidade) — usada no modelo geral por amostra.
+function airDensityDry(P_kPa, tC){
+  const Tk = tC+273.15;
+  return (P_kPa*1000)/(R_DRY*Tk);
+}
+
+// Mínimo em janela móvel retroativa por TEMPO (não por nº de amostras), via deque monotônico
+// O(n). Usado para estimar temperatura externa a partir do IAT, evitando que calor retido no
+// cofre do motor (parado/lenta) seja lido como ambiente — o ambiente real é sempre a MENOR
+// leitura disponível numa janela recente, nunca maior que o que o motor retém.
+function rollingMinByTime(times, values, windowSeconds){
+  const N = times.length;
+  const result = new Array(N).fill(NaN);
+  const deque = []; // índices, valores crescentes
+  let head = 0;
+  for(let i=0;i<N;i++){
+    const t = times[i], v = values[i];
+    if(!isNaN(t) && !isNaN(v)){
+      while(deque.length && values[deque[deque.length-1]] >= v) deque.pop();
+      deque.push(i);
+    }
+    while(deque.length && !isNaN(times[deque[0]]) && (t - times[deque[0]]) > windowSeconds) deque.shift();
+    result[i] = deque.length ? values[deque[0]] : NaN;
+  }
+  return result;
 }
 
 const DASH_MIN_SATS = 4;
@@ -1120,6 +1209,9 @@ function getParams(){
     cda: parseFloat(document.getElementById('p_cda').value),
     crr: parseFloat(document.getElementById('p_crr').value),
     rho: parseFloat(document.getElementById('p_rho').value),
+    avgAltitude: parseFloat(document.getElementById('p_altitude').value),
+    useGpsAltitude: document.getElementById('p_usegpsalt').checked,
+    iatWindowMin: parseFloat(document.getElementById('p_iatwindow').value),
     accelUnit: document.getElementById('p_accelunit').value,
     tireRadius: parseFloat(document.getElementById('p_tire').value),
     diffRatio: parseFloat(document.getElementById('p_diff').value),
@@ -1189,6 +1281,8 @@ function processFile(rec, params, dashTimeline){
     inj: headers.indexOf('Fuel Injection Timing'),
     gft: headers.indexOf('Global Fuel Trim'),
     fct: headers.indexOf('Fuel Comp Total'),
+    iat: headers.indexOf('Intake Air Temperature IAT'),
+    dt: headers.indexOf('Datalog Time'),
   };
   const N = rows.length;
 
@@ -1196,7 +1290,28 @@ function processFile(rec, params, dashTimeline){
   // dashboard carregado para casar contra (evita custo à toa quando não há enriquecimento).
   let ecuAbsTime = null;
   if(dashTimeline && idx.gpsDate>=0 && idx.gpsTime>=0){
-    ecuAbsTime = buildAbsoluteTimeline(rows, headers.indexOf('Datalog Time'), idx.gpsDate, idx.gpsTime, idx.gpsSats, DASH_MIN_SATS).absTime;
+    ecuAbsTime = buildAbsoluteTimeline(rows, idx.dt, idx.gpsDate, idx.gpsTime, idx.gpsSats, DASH_MIN_SATS).absTime;
+  }
+
+  // Densidade do ar por amostra: pressão da altitude (GPS quando disponível e habilitado,
+  // senão a altitude fixa do projeto) + temperatura do piso de IAT numa janela móvel (evita
+  // ler calor retido no cofre do motor como se fosse ambiente). Sem canal de IAT, cai no ρ
+  // fixo de fallback da seção 02 para todas as amostras deste arquivo.
+  let rhoSample = null;
+  if(idx.iat>=0 && idx.dt>=0){
+    const dtVals = new Array(N), iatVals = new Array(N);
+    for(let i=0;i<N;i++){ dtVals[i] = num(rows[i], idx.dt); iatVals[i] = num(rows[i], idx.iat); }
+    const iatFloor = rollingMinByTime(dtVals, iatVals, params.iatWindowMin*60);
+    rhoSample = new Array(N);
+    for(let i=0;i<N;i++){
+      let altitude = params.avgAltitude;
+      if(params.useGpsAltitude && dashTimeline && ecuAbsTime && !isNaN(ecuAbsTime[i])){
+        const ap = dashTimeline.altAt(ecuAbsTime[i]);
+        if(ap) altitude = ap.alt;
+      }
+      const tC = iatFloor[i];
+      rhoSample[i] = !isNaN(tC) ? airDensityDry(pressureFromAltitude(altitude)/1000, tC) : params.rho;
+    }
   }
 
   const etVals = new Array(N);
@@ -1305,8 +1420,9 @@ function processFile(rec, params, dashTimeline){
         if(gr>0 && !isNaN(rpm)) v = (rpm/(gr*params.diffRatio))*(2*Math.PI*params.tireRadius)/60;
       }
       if(!isNaN(v) && v>0 && !isNaN(a)){
+        const rhoHere = rhoSample ? rhoSample[i] : params.rho;
         let F = params.mass*params.inertiaFactor*a
-                + 0.5*params.rho*params.cda*v*v
+                + 0.5*rhoHere*params.cda*v*v
                 + params.crr*params.mass*gAll;
         // Correção de rampa: F_tração = m·a + arrasto + rolamento + m·g·sen(θ). Só aplicada
         // quando há cobertura de altitude (dashboard) e a opção está ligada — ver nota na
@@ -1794,8 +1910,15 @@ document.getElementById('btnCalibrate').addEventListener('click', ()=>{
   const inMin = parseFloat(document.getElementById('c_in_min').value);
   const inMax = parseFloat(document.getElementById('c_in_max').value);
   const inStep = parseFloat(document.getElementById('c_in_step').value);
+  const pKpaDyno = parseFloat(document.getElementById('c_pkpa').value);
+  const tcDyno = parseFloat(document.getElementById('c_tc').value);
+  const rhDyno = parseFloat(document.getElementById('c_rh').value);
+  const rhoDyno = airDensityHumid(pKpaDyno, tcDyno, rhDyno);
+  document.getElementById('calibDensityInfo').textContent =
+    `ρ do ensaio (calculada de ${pKpaDyno} kPa, ${tcDyno}°C, ${rhDyno}% UR): ${rhoDyno.toFixed(4)} kg/m³ — usada na busca abaixo em vez do ρ fixo da seção 02.`;
 
   const baseParams = getParams();
+  baseParams.rho = rhoDyno; // a calibração usa a densidade do dia do ensaio, não a fixa/geral
 
   // gather raw calibration samples (gear==gearWanted, WOT+ET already filtered, from files of this tag with usePower)
   const calibSamples = [];
