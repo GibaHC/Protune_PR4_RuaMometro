@@ -257,12 +257,12 @@
         </div>
         <div class="field">
           <label>Fator de inércia rotativa</label>
-          <input type="number" id="p_inertia" value="1.07" step="0.01">
+          <input type="number" id="p_inertia" value="1.15" step="0.01">
           <div class="note">calibrado contra o dyno (12/08, motor novo) — ver seção 05</div>
         </div>
         <div class="field">
           <label>Cx·A — arrasto (m²)</label>
-          <input type="number" id="p_cda" value="0.75" step="0.01">
+          <input type="number" id="p_cda" value="0.7" step="0.01">
           <div class="note">calibrado contra o dyno (12/08, motor novo) — ver seção 05</div>
         </div>
         <div class="field">
@@ -446,7 +446,7 @@
         </div>
         <div class="field">
           <label>Aceleração máxima plausível (g)</label>
-          <input type="number" id="p_accelmax" value="1.0" step="0.05">
+          <input type="number" id="p_accelmax" value="1.5" step="0.05">
           <div class="note">acima disso é choque de embreagem/trem de força na troca de marcha ou ruído de sensor, não aceleração real sustentada do veículo — aplicado nos dois regimes</div>
         </div>
         <div class="field">
@@ -665,18 +665,25 @@
         <div class="note">janela ao redor de RPM_Pmax/RPM_Tmax usada para selecionar amostras de comparação — maior tolerância dá mais amostras mas compara pontos de RPM mais distantes do alvo exato</div>
       </div>
       <div class="field"><label>Cx·A: mín / máx / passo</label>
-        <div class="row"><input type="number" id="c_cda_min" value="0.70" step="0.01"><input type="number" id="c_cda_max" value="1.40" step="0.01"><input type="number" id="c_cda_step" value="0.01" step="0.01"></div>
+        <div class="row"><input type="number" id="c_cda_min" value="0.70" step="0.01"><input type="number" id="c_cda_max" value="1.10" step="0.01"><input type="number" id="c_cda_step" value="0.01" step="0.01"></div>
         <div class="note">faixa e passo da busca em grade para o coeficiente de arrasto (mesma variável de "Cx·A — arrasto" na seção 02) — a busca testa cada combinação com a faixa de "Inércia" ao lado e reporta a de menor erro</div>
       </div>
       <div class="field"><label>Inércia: mín / máx / passo</label>
-        <div class="row"><input type="number" id="c_in_min" value="1.01" step="0.01"><input type="number" id="c_in_max" value="1.60" step="0.01"><input type="number" id="c_in_step" value="0.01" step="0.01"></div>
+        <div class="row"><input type="number" id="c_in_min" value="1.01" step="0.01"><input type="number" id="c_in_max" value="1.30" step="0.01"><input type="number" id="c_in_step" value="0.01" step="0.01"></div>
         <div class="note">faixa e passo da busca em grade para o fator de inércia rotativa (mesma variável da seção 02) — grade de N×M combinações, custo cresce com o produto dos dois tamanhos de passo</div>
       </div>
     </div>
     <div id="calibDensityInfo" class="sub" style="margin-top:8px;"></div>
+    <div id="calibComboEstimate" class="sub" style="margin-top:4px;"></div>
     <div class="row" style="margin-top:14px;">
       <button class="btn" id="btnCalibrate">Rodar calibração</button>
       <button class="btn secondary" id="btnApplyCalib" disabled>Aplicar melhor resultado aos parâmetros</button>
+    </div>
+    <div id="calibProgressWrap" style="display:none; margin-top:12px;">
+      <div style="background:var(--surface2); border-radius:6px; height:8px; overflow:hidden;">
+        <div id="calibProgressBar" style="background:var(--amber); height:100%; width:0%; transition:width .1s;"></div>
+      </div>
+      <div id="calibProgressLabel" class="sub" style="margin-top:6px;"></div>
     </div>
     <div id="calibResult" class="calib-result" style="margin-top:14px;"></div>
   </div>
@@ -1997,7 +2004,27 @@ function populateCalibTagSelect(){
   sel.innerHTML = aggregated.tags.map(t=>`<option value="${t}">${t}</option>`).join('');
 }
 
-document.getElementById('btnCalibrate').addEventListener('click', ()=>{
+function updateComboEstimate(){
+  const cdaMin = parseFloat(document.getElementById('c_cda_min').value);
+  const cdaMax = parseFloat(document.getElementById('c_cda_max').value);
+  const cdaStep = parseFloat(document.getElementById('c_cda_step').value);
+  const inMin = parseFloat(document.getElementById('c_in_min').value);
+  const inMax = parseFloat(document.getElementById('c_in_max').value);
+  const inStep = parseFloat(document.getElementById('c_in_step').value);
+  const el = document.getElementById('calibComboEstimate');
+  if([cdaMin,cdaMax,cdaStep,inMin,inMax,inStep].some(v=>isNaN(v)||v<=0) || cdaMax<cdaMin || inMax<inMin){
+    el.textContent = ''; return;
+  }
+  const cdaCount = Math.floor((cdaMax-cdaMin)/cdaStep + 1e-9) + 1;
+  const inCount = Math.floor((inMax-inMin)/inStep + 1e-9) + 1;
+  el.textContent = `${cdaCount} × ${inCount} = ${cdaCount*inCount} combinações a testar`;
+}
+['c_cda_min','c_cda_max','c_cda_step','c_in_min','c_in_max','c_in_step'].forEach(id=>{
+  document.getElementById(id).addEventListener('input', updateComboEstimate);
+});
+updateComboEstimate();
+
+document.getElementById('btnCalibrate').addEventListener('click', async ()=>{
   if(!aggregated){ return; }
   const tag = document.getElementById('c_tag').value;
   const gearWanted = parseInt(document.getElementById('c_gear').value);
@@ -2023,44 +2050,68 @@ document.getElementById('btnCalibrate').addEventListener('click', ()=>{
   const baseParams = getParams();
   baseParams.rho = rhoDyno; // a calibração usa a densidade do dia do ensaio, não a fixa/geral
 
-  // gather raw calibration samples (gear==gearWanted, WOT+ET already filtered, from files of this tag with usePower)
-  const calibSamples = [];
-  aggregated._fileResults.filter(fr=>fr.tag===tag && fr.usePower).forEach(fr=>{
-    fr.samples.forEach(s=>{
-      if(Math.round(s.gear)===gearWanted && (Math.abs(s.rpm-rpmP)<=rpmTol*1.5 || Math.abs(s.rpm-rpmT)<=rpmTol*1.5)){
-        calibSamples.push(s);
-      }
-    });
-  });
+  const btn = document.getElementById('btnCalibrate');
+  btn.disabled = true;
+  const progressWrap = document.getElementById('calibProgressWrap');
+  const progressBar = document.getElementById('calibProgressBar');
+  const progressLabel = document.getElementById('calibProgressLabel');
+  progressWrap.style.display = 'block';
+  progressBar.style.width = '0%';
+  progressLabel.textContent = 'filtrando amostras…';
+  document.getElementById('calibResult').innerHTML = '';
+  await new Promise(r=>requestAnimationFrame(r));
 
-  if(!calibSamples.length){
-    document.getElementById('calibResult').innerHTML = '<span style="color:var(--red)">Nenhuma amostra WOT encontrada na marcha '+gearWanted+' para o mapa "'+tag+'" perto de '+rpmP+' ou '+rpmT+' rpm. Verifique se o arquivo tem canal de Marcha confiável nesses trechos.</span>';
+  const eligibleRows = getEligibleCalibRows(tag, gearWanted, baseParams, dashTimelineForCalib);
+
+  if(!eligibleRows.length){
+    progressWrap.style.display = 'none';
+    btn.disabled = false;
+    document.getElementById('calibResult').innerHTML = '<span style="color:var(--red)">Nenhuma amostra WOT encontrada na marcha '+gearWanted+' para o mapa "'+tag+'". Verifique se o arquivo tem canal de Marcha confiável nesses trechos.</span>';
     return;
   }
 
-  // need raw a and v per sample to recompute F under different cda/inertia -> recompute from scratch using raw file rows would be heavier;
-  // instead, reconstruct v and a approx from stored pHP/torque back out is not reliable, so recompute directly here using stored rpm/gear and re-deriving v via gear ratio + rpm (consistent with main pipeline when GPS speed unused). We approximate a from stored torque/power at baseline params (invert), which is imprecise, so instead re-derive a from original formula requires raw acceleration - re-run processFile-lite over raw rows restricted to calib window.
+  const cdaCount = Math.floor((cdaMax-cdaMin)/cdaStep + 1e-9) + 1;
+  const inCount = Math.floor((inMax-inMin)/inStep + 1e-9) + 1;
+  const totalCombos = Math.max(0, cdaCount) * Math.max(0, inCount);
 
   let best=null;
   const results = [];
-  for(let cda=cdaMin; cda<=cdaMax+1e-9; cda+=cdaStep){
-    for(let inertia=inMin; inertia<=inMax+1e-9; inertia+=inStep){
-      const testParams = Object.assign({}, baseParams, {cda:Number(cda.toFixed(4)), inertiaFactor:Number(inertia.toFixed(4))});
-      const recomputed = recomputeCalibSamples(tag, gearWanted, testParams, dashTimelineForCalib);
-      if(!recomputed.length) continue;
+  let done = 0;
+  let lastYield = performance.now();
+
+  for(let ci=0; ci<cdaCount; ci++){
+    const cda = Number((cdaMin + ci*cdaStep).toFixed(4));
+    for(let ii=0; ii<inCount; ii++){
+      const inertia = Number((inMin + ii*inStep).toFixed(4));
+      const recomputed = computeCalibPowerFast(eligibleRows, cda, inertia, baseParams);
       const nearP = recomputed.filter(s=>Math.abs(s.rpm-rpmP)<=rpmTol);
       const nearT = recomputed.filter(s=>Math.abs(s.rpm-rpmT)<=rpmTol);
       const pEst = binStat(nearP.map(s=>s.pHP), baseParams);
       const tEst = binStat(nearT.map(s=>s.torqueNm), baseParams);
-      if(isNaN(pEst)) continue;
-      const errP = Math.abs(pEst-pDyno)/pDyno;
-      const errT = isNaN(tEst) ? null : Math.abs(tEst-tDyno)/tDyno;
-      const combinedErr = errT!==null ? (errP+errT)/2 : errP;
-      const rec = {cda:testParams.cda, inertia:testParams.inertiaFactor, pEst, tEst, errP, errT, combinedErr, nP:nearP.length, nT:nearT.length};
-      results.push(rec);
-      if(!best || combinedErr < best.combinedErr) best = rec;
+      done++;
+      if(!isNaN(pEst)){
+        const errP = Math.abs(pEst-pDyno)/pDyno;
+        const errT = isNaN(tEst) ? null : Math.abs(tEst-tDyno)/tDyno;
+        const combinedErr = errT!==null ? (errP+errT)/2 : errP;
+        const rec = {cda, inertia, pEst, tEst, errP, errT, combinedErr, nP:nearP.length, nT:nearT.length};
+        results.push(rec);
+        if(!best || combinedErr < best.combinedErr) best = rec;
+      }
+
+      if(performance.now()-lastYield > 60){
+        const pct = totalCombos ? (100*done/totalCombos) : 100;
+        progressBar.style.width = pct.toFixed(1)+'%';
+        progressLabel.textContent = `testando combinações… ${done}/${totalCombos} (${pct.toFixed(0)}%)`;
+        lastYield = performance.now();
+        await new Promise(r=>requestAnimationFrame(r));
+      }
     }
   }
+
+  progressBar.style.width = '100%';
+  progressLabel.textContent = `concluído — ${done}/${totalCombos} combinações testadas`;
+  setTimeout(()=>{ progressWrap.style.display = 'none'; }, 800);
+  btn.disabled = false;
 
   if(!best){
     document.getElementById('calibResult').innerHTML = '<span style="color:var(--red)">Busca não convergiu — amplie a janela de tolerância de RPM ou verifique os dados de calibração.</span>';
@@ -2083,8 +2134,9 @@ document.getElementById('btnCalibrate').addEventListener('click', ()=>{
   `;
 });
 
-function recomputeCalibSamples(tag, gearWanted, params, dashTimeline){
+function getEligibleCalibRows(tag, gearWanted, params, dashTimeline){
   const out = [];
+  const gAll = 9.80665;
   aggregated._fileResults.filter(fr=>fr.tag===tag && fr.usePower).forEach(fr=>{
     const rec = files.find(f=>f.id===fr.fileId);
     if(!rec) return;
@@ -2102,16 +2154,12 @@ function recomputeCalibSamples(tag, gearWanted, params, dashTimeline){
       et: headers.indexOf('Engine Temperature ET'),
       dt: headers.indexOf('Datalog Time'),
     };
-    const gAll = 9.80665;
 
-    // Timeline absoluta deste arquivo, para correção de rampa — mesma lógica do pipeline principal.
     let ecuAbsTime = null;
     if(dashTimeline && idx.gpsDate>=0 && idx.gpsTime>=0){
       ecuAbsTime = buildAbsoluteTimeline(rows, idx.dt, idx.gpsDate, idx.gpsTime, idx.gpsSats, DASH_MIN_SATS).absTime;
     }
 
-    // Despique de anomalia de ET (degrau + janela de expansão), mesma lógica do pipeline principal —
-    // antes a calibração só checava min/máx pontual, sem isso.
     const N = rows.length;
     const etVals = new Array(N);
     for(let i=0;i<N;i++) etVals[i] = num(rows[i], idx.et);
@@ -2126,7 +2174,6 @@ function recomputeCalibSamples(tag, gearWanted, params, dashTimeline){
     const etExcluded = etBad.slice();
     for(let i=0;i<N;i++){ if(etBad[i]){ const lo=Math.max(0,i-params.etWindow), hi=Math.min(N-1,i+params.etWindow); for(let k=lo;k<=hi;k++) etExcluded[k]=true; } }
 
-    // despique de salto de GPS Speed, mesma lógica do pipeline principal
     const gsExcluded = new Array(rows.length).fill(false);
     if(idx.gpsSpeed>=0){
       const gsVals = new Array(rows.length);
@@ -2145,7 +2192,6 @@ function recomputeCalibSamples(tag, gearWanted, params, dashTimeline){
       }
     }
 
-    // despique de estabilidade de TP (janela retroativa de amplitude), mesma lógica do pipeline principal
     const tpExcluded = new Array(rows.length).fill(false);
     {
       const loadValsAll = new Array(rows.length);
@@ -2181,7 +2227,7 @@ function recomputeCalibSamples(tag, gearWanted, params, dashTimeline){
       let a = num(rows[i], idx.accel);
       if(isNaN(a)) continue;
       if(params.accelUnit==='g') a = a*gAll;
-      let ag = a/gAll; // normaliza de volta para g, independente da unidade original do log
+      let ag = a/gAll;
       if(ag < params.accelMinWot) continue;
       if(ag > params.accelMax) continue;
       let v = NaN;
@@ -2195,22 +2241,31 @@ function recomputeCalibSamples(tag, gearWanted, params, dashTimeline){
         if(gr>0) v = (rpm/(gr*params.diffRatio))*(2*Math.PI*params.tireRadius)/60;
       }
       if(isNaN(v) || v<=0) continue;
-      let F = params.mass*params.inertiaFactor*a + 0.5*params.rho*params.cda*v*v + params.crr*params.mass*gAll;
+
+      // Parte constante da força de tração que NÃO depende de Cx·A/inércia (rolamento + rampa,
+      // se aplicável) — pré-computada aqui pra não recalcular a cada combinação da busca.
+      let constF = params.crr*params.mass*gAll;
       if(params.applyGradeCorrection && dashTimeline && ecuAbsTime && !isNaN(ecuAbsTime[i])){
         const g = dashTimeline.gradeAt(ecuAbsTime[i]);
         if(!isNaN(g)){
           const theta = Math.atan(g/100);
-          F += params.mass*gAll*Math.sin(theta);
+          constF += params.mass*gAll*Math.sin(theta);
         }
       }
-      const pW = F*v;
-      const pHP = pW/745.7;
-      const pkW = pW/1000;
-      const torqueNm = pkW*9549/rpm;
-      out.push({rpm, pHP, torqueNm});
+      out.push({rpm, a, v, constF});
     }
   });
   return out;
+}
+
+// Cálculo rápido por combinação de Cx·A/inércia, reaproveitando as linhas já filtradas acima —
+// é só aritmética sobre um array, sem tocar nos arquivos brutos de novo.
+function computeCalibPowerFast(eligibleRows, cda, inertia, params){
+  return eligibleRows.map(r=>{
+    const F = params.mass*inertia*r.a + 0.5*params.rho*cda*r.v*r.v + r.constF;
+    const pW = F*r.v;
+    return {rpm:r.rpm, pHP: pW/745.7, torqueNm: (pW/1000)*9549/r.rpm};
+  });
 }
 
 document.getElementById('btnApplyCalib').addEventListener('click', ()=>{
