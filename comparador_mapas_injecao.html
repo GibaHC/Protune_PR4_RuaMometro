@@ -212,7 +212,7 @@
           <table class="filetable" id="fileTable" style="display:none;">
             <thead><tr>
               <th>Arquivo</th><th>Sessão</th><th>Mapa</th><th>Linhas</th>
-              <th>Canais potência</th><th>Alertas QC</th><th>Usar p/ potência</th><th></th>
+              <th>Canais potência</th><th>Alt. GPS</th><th>Alertas QC</th><th>Usar p/ potência</th><th></th>
             </tr></thead>
             <tbody id="fileTableBody"></tbody>
           </table>
@@ -257,12 +257,12 @@
         </div>
         <div class="field">
           <label>Fator de inércia rotativa</label>
-          <input type="number" id="p_inertia" value="1.52" step="0.01">
+          <input type="number" id="p_inertia" value="1.07" step="0.01">
           <div class="note">calibrado contra o dyno (12/08, motor novo) — ver seção 05</div>
         </div>
         <div class="field">
           <label>Cx·A — arrasto (m²)</label>
-          <input type="number" id="p_cda" value="0.73" step="0.01">
+          <input type="number" id="p_cda" value="0.75" step="0.01">
           <div class="note">calibrado contra o dyno (12/08, motor novo) — ver seção 05</div>
         </div>
         <div class="field">
@@ -637,19 +637,19 @@
         <div class="note">pressão atmosférica medida no dia do dyno — usada para calcular a densidade do ar daquele ensaio específico (ρ_dyno), em vez do ρ fixo/genérico da seção 02. Isso evita calibrar Cx·A/inércia contra uma densidade que não é a do dia real do ensaio</div>
       </div>
       <div class="field">
-        <label>Temperatura do ensaio (°C)</label><input type="number" id="c_tc" value="30.9" step="0.1">
+        <label>Temperatura do ensaio (°C)</label><input type="number" id="c_tc" value="30.8" step="0.1">
         <div class="note">temperatura do ar medida no dia do dyno, usada junto com "Pressão do ensaio" em ρ = P/(Rd×T)</div>
       </div>
       <div class="field">
-        <label>Umidade relativa do ensaio (%)</label><input type="number" id="c_rh" value="35.1" step="0.1">
+        <label>Umidade relativa do ensaio (%)</label><input type="number" id="c_rh" value="35.8" step="0.1">
         <div class="note">só usada aqui na calibração (não no cálculo geral dos mapas). Ar úmido é menos denso que ar seco na mesma P/T — a correção usa pressão de vapor saturado (Magnus-Tetens) × UR% para achar a pressão parcial de vapor, e a densidade final é a soma das parcelas de ar seco e vapor</div>
       </div>
       <div class="field">
-        <label>P_dyno_max (wHP)</label><input type="number" id="c_pdyno" value="105.22" step="0.01">
+        <label>P_dyno_max (wHP)</label><input type="number" id="c_pdyno" value="105.99" step="0.01">
         <div class="note">potência de referência medida no dinamômetro (potência na roda), alvo que a busca em grade tenta reproduzir</div>
       </div>
       <div class="field">
-        <label>RPM_Pmax</label><input type="number" id="c_rpmP" value="5000">
+        <label>RPM_Pmax</label><input type="number" id="c_rpmP" value="5200">
         <div class="note">RPM do motor onde P_dyno_max foi medida — a busca compara a potência estimada dentro de ±tolerância de RPM ao redor deste valor</div>
       </div>
       <div class="field">
@@ -657,7 +657,7 @@
         <div class="note">torque de referência do dyno, convertido internamente para N·m (×9,80665) para comparar com o torque estimado (T = P_kW×9549/RPM)</div>
       </div>
       <div class="field">
-        <label>RPM_Tmax (centro)</label><input type="number" id="c_rpmT" value="3250">
+        <label>RPM_Tmax (centro)</label><input type="number" id="c_rpmT" value="4400">
         <div class="note">RPM do motor onde T_dyno_max foi medido — mesma lógica de tolerância de "RPM_Pmax"</div>
       </div>
       <div class="field">
@@ -712,9 +712,10 @@ function colorForTag(tag){
 
 function classify(filename){
   const f = filename.toLowerCase();
-  // captura qualquer padrão "soma_NN" / "tira_NN" (com ou sem underscore/hífen), presente e futuro
-  const m = f.match(/(soma|tira)[_-]?(\d+)/);
+  // captura qualquer padrão "soma_NN" / "tira_NN" / "calib_NN" (com ou sem underscore/hífen), presente e futuro
+  const m = f.match(/(soma|tira|calib)[_-]?(\d+)/);
   if(m) return m[1]+'_'+m[2];
+  if(/(^|[^a-z])calib([^a-z]|$)/.test(f)) return 'calib';
   if(/vvt|_base_|(^|[^a-z])base([^a-z]|$)/.test(f)) return 'base';
   return 'custom';
 }
@@ -829,6 +830,7 @@ function handleFiles(fileList){
         rec.summary = summarizeDashFile(rec);
         dashFiles.push(rec);
         renderDashFileTable();
+        renderFileTable(); // recalcula cobertura de altitude dos arquivos de ECU já carregados
         document.getElementById('statusMsg').textContent = '';
         document.getElementById('btnProcess').disabled = files.length===0;
         return;
@@ -1079,6 +1081,7 @@ function renderDashFileTable(){
     btn.addEventListener('click', e=>{
       dashFiles = dashFiles.filter(x=>x.id!==e.target.dataset.id);
       renderDashFileTable();
+      renderFileTable(); // recalcula cobertura de altitude sem esse arquivo de dashboard
     });
   });
 }
@@ -1164,6 +1167,31 @@ function runQC(headers, rows, idxAccel, idxGear, idxRpm){
   return {flags, severe};
 }
 
+// Cobertura de altitude do GPS por arquivo de ECU, contra os logs de dashboard já carregados.
+// Recalculada sempre que a lista de arquivos ou de dashboards muda. Varre linha a linha (não
+// amostra) porque a coluna de check "100%" precisa ser exata, não aproximada.
+function updateAltitudeCoverage(){
+  if(!dashFiles.length){
+    files.forEach(rec=>{ rec.altCoverage = undefined; });
+    return;
+  }
+  const dashTimeline = buildDashAltitudeTimeline();
+  files.forEach(rec=>{
+    const idx = {
+      dt: rec.headers.indexOf('Datalog Time'), gpsDate: rec.headers.indexOf('GPS UTC Date'),
+      gpsTime: rec.headers.indexOf('GPS UTC Time'), gpsSats: rec.headers.indexOf('GPS Sats Used')
+    };
+    if(!dashTimeline || idx.gpsDate<0 || idx.gpsTime<0){ rec.altCoverage = {pct:0, n:0, total:rec.rows.length}; return; }
+    const absTime = buildAbsoluteTimeline(rec.rows, idx.dt, idx.gpsDate, idx.gpsTime, idx.gpsSats, DASH_MIN_SATS).absTime;
+    let covered=0;
+    for(let i=0;i<rec.rows.length;i++){
+      if(isNaN(absTime[i])) continue;
+      if(dashTimeline.altAt(absTime[i])) covered++;
+    }
+    rec.altCoverage = {pct: rec.rows.length ? (100*covered/rec.rows.length) : 0, n:covered, total:rec.rows.length};
+  });
+}
+
 function renderFileTable(){
   const tbl = document.getElementById('fileTable');
   const body = document.getElementById('fileTableBody');
@@ -1179,6 +1207,7 @@ function renderFileTable(){
     return a.name.localeCompare(b.name);
   });
 
+  updateAltitudeCoverage();
   renderTagOrderUI();
 
   // datalist com todos os clusters já vistos (descobertos dinamicamente pelo nome do arquivo,
@@ -1203,12 +1232,26 @@ function renderFileTable(){
       ? '<span class="flag flag-power">disponível</span>'
       : '<span class="flag flag-nopower">ausente</span>';
 
+    let altCell;
+    if(!dashFiles.length){
+      altCell = '<span style="color:var(--dimmer)">— sem log de dashboard</span>';
+    } else if(rec.altCoverage===undefined){
+      altCell = '<span style="color:var(--dimmer)">calculando…</span>';
+    } else if(rec.altCoverage.pct===100){
+      altCell = '<span class="badge b-ok">✓ 100%</span>';
+    } else if(rec.altCoverage.pct===0){
+      altCell = '<span class="badge b-bad">⚠ sem cobertura</span>';
+    } else {
+      altCell = `<span class="badge b-warn">${fmt(rec.altCoverage.pct,0)}%</span>`;
+    }
+
     tr.innerHTML = `
       <td title="${rec.name}">${rec.name.length>28?rec.name.slice(0,26)+'…':rec.name}</td>
       <td>${rec.sessionLabel}</td>
       <td><input type="text" data-id="${rec.id}" class="tagSelect" list="tagDatalist" value="${rec.tag}" style="width:100px;"></td>
       <td>${rec.N}</td>
       <td>${powerBadge}</td>
+      <td>${altCell}</td>
       <td>${qcBadge}</td>
       <td><input type="checkbox" data-id="${rec.id}" class="usePowerChk" ${rec.usePower?'checked':''} ${rec.hasPowerChannels?'':'disabled'}></td>
       <td><button data-id="${rec.id}" class="btn secondary removeBtn" style="padding:4px 10px;font-size:11px;">remover</button></td>
@@ -1550,6 +1593,10 @@ function processFile(rec, params, dashTimeline){
   return {
     fileId:rec.id, fileName:rec.name, tag:rec.tag, N,
     wotCount, etExcludedCount, loadCount, preCrankBaroKPa,
+    gradeCoverage: {
+      n: out.concat(outLoad).filter(s=>!isNaN(s.grade)).length,
+      total: out.length+outLoad.length
+    },
     hasPowerChannels: rec.hasPowerChannels, usePower: rec.usePower,
     qc: rec.qc, samples: out, samplesPartial: outLoad
   };
@@ -1878,7 +1925,7 @@ function renderLambdaTab(agg, suffix){
 }
 
 function renderQCTab(fileResults){
-  let hQC = '<thead><tr><th>Arquivo</th><th>Mapa</th><th>Linhas</th><th>Excluídas p/ ET</th><th>Amostras WOT</th><th>Amostras carga média</th><th>Pressão pré-partida</th><th>Potência</th><th>Alertas</th></tr></thead><tbody>';
+  let hQC = '<thead><tr><th>Arquivo</th><th>Mapa</th><th>Linhas</th><th>Excluídas p/ ET</th><th>Amostras WOT</th><th>Amostras carga média</th><th>Pressão pré-partida</th><th>Altitude (elegíveis)</th><th>Potência</th><th>Alertas</th></tr></thead><tbody>';
   fileResults.forEach(fr=>{
     const powerStatus = fr.hasPowerChannels
       ? (fr.usePower ? '<span class="badge b-ok">habilitada</span>' : '<span class="badge b-warn">desabilitada</span>')
@@ -1886,9 +1933,14 @@ function renderQCTab(fileResults){
     const baro = !isNaN(fr.preCrankBaroKPa)
       ? `${fmt(fr.preCrankBaroKPa,1)} kPa <span class="sub">(≈${fmt(altitudeFromPressureKPa(fr.preCrankBaroKPa),0)}m)</span>`
       : '<span class="badge b-warn">não detectada</span>';
+    const gc = fr.gradeCoverage;
+    const gcPct = gc.total ? 100*gc.n/gc.total : 0;
+    const gcCls = gc.total===0 ? '' : (gc.n===0 ? 'b-bad' : (gc.n===gc.total ? 'b-ok' : 'b-warn'));
+    const altCoverage = gc.total===0 ? '<span style="color:var(--dimmer)">—</span>'
+      : `<span class="badge ${gcCls}">${gc.n}/${gc.total} (${fmt(gcPct,0)}%)</span>`;
     hQC += `<tr><td>${fr.fileName}</td><td style="color:${colorForTag(fr.tag)}">${fr.tag}</td>
       <td>${fr.N}</td><td>${fr.etExcludedCount} (${fmt(100*fr.etExcludedCount/fr.N,1)}%)</td>
-      <td>${fr.wotCount}</td><td>${fr.loadCount}</td><td>${baro}</td><td>${powerStatus}</td>
+      <td>${fr.wotCount}</td><td>${fr.loadCount}</td><td>${baro}</td><td>${altCoverage}</td><td>${powerStatus}</td>
       <td>${fr.qc.flags.length? fr.qc.flags.join('; '):'—'}</td></tr>`;
   });
   hQC += '</tbody>';
@@ -1964,8 +2016,9 @@ document.getElementById('btnCalibrate').addEventListener('click', ()=>{
   const tcDyno = parseFloat(document.getElementById('c_tc').value);
   const rhDyno = parseFloat(document.getElementById('c_rh').value);
   const rhoDyno = airDensityHumid(pKpaDyno, tcDyno, rhDyno);
-  document.getElementById('calibDensityInfo').textContent =
-    `ρ do ensaio (calculada de ${pKpaDyno} kPa, ${tcDyno}°C, ${rhDyno}% UR): ${rhoDyno.toFixed(4)} kg/m³ — usada na busca abaixo em vez do ρ fixo da seção 02.`;
+  const dashTimelineForCalib = buildDashAltitudeTimeline();
+  document.getElementById('calibDensityInfo').innerHTML =
+    `ρ do ensaio (calculada de ${pKpaDyno} kPa, ${tcDyno}°C, ${rhDyno}% UR): ${rhoDyno.toFixed(4)} kg/m³ — usada na busca abaixo, no lugar da densidade por amostra que o gráfico principal calcula (altitude+IAT). São propositalmente diferentes: aqui queremos a densidade real do dia do dyno; lá, a densidade real de cada sessão. Não espere o mesmo Cx·A/inércia reproduzir exatamente o mesmo wHP nas duas telas — a comparação correta é contra P_dyno_max/T_dyno_max, não contra o gráfico.`;
 
   const baseParams = getParams();
   baseParams.rho = rhoDyno; // a calibração usa a densidade do dia do ensaio, não a fixa/geral
@@ -1993,12 +2046,12 @@ document.getElementById('btnCalibrate').addEventListener('click', ()=>{
   for(let cda=cdaMin; cda<=cdaMax+1e-9; cda+=cdaStep){
     for(let inertia=inMin; inertia<=inMax+1e-9; inertia+=inStep){
       const testParams = Object.assign({}, baseParams, {cda:Number(cda.toFixed(4)), inertiaFactor:Number(inertia.toFixed(4))});
-      const recomputed = recomputeCalibSamples(tag, gearWanted, testParams);
+      const recomputed = recomputeCalibSamples(tag, gearWanted, testParams, dashTimelineForCalib);
       if(!recomputed.length) continue;
       const nearP = recomputed.filter(s=>Math.abs(s.rpm-rpmP)<=rpmTol);
       const nearT = recomputed.filter(s=>Math.abs(s.rpm-rpmT)<=rpmTol);
-      const pEst = mean(nearP.map(s=>s.pHP));
-      const tEst = mean(nearT.map(s=>s.torqueNm));
+      const pEst = binStat(nearP.map(s=>s.pHP), baseParams);
+      const tEst = binStat(nearT.map(s=>s.torqueNm), baseParams);
       if(isNaN(pEst)) continue;
       const errP = Math.abs(pEst-pDyno)/pDyno;
       const errT = isNaN(tEst) ? null : Math.abs(tEst-tDyno)/tDyno;
@@ -2030,7 +2083,7 @@ document.getElementById('btnCalibrate').addEventListener('click', ()=>{
   `;
 });
 
-function recomputeCalibSamples(tag, gearWanted, params){
+function recomputeCalibSamples(tag, gearWanted, params, dashTimeline){
   const out = [];
   aggregated._fileResults.filter(fr=>fr.tag===tag && fr.usePower).forEach(fr=>{
     const rec = files.find(f=>f.id===fr.fileId);
@@ -2042,10 +2095,36 @@ function recomputeCalibSamples(tag, gearWanted, params){
       rpm: headers.indexOf('Engine Speed'),
       gpsSpeed: headers.indexOf('GPS Speed'),
       gpsFix: headers.indexOf('GPS Fix Status'),
+      gpsDate: headers.indexOf('GPS UTC Date'),
+      gpsTime: headers.indexOf('GPS UTC Time'),
+      gpsSats: headers.indexOf('GPS Sats Used'),
       tp: headers.indexOf('Throttle Position TP TP1L'),
       et: headers.indexOf('Engine Temperature ET'),
+      dt: headers.indexOf('Datalog Time'),
     };
     const gAll = 9.80665;
+
+    // Timeline absoluta deste arquivo, para correção de rampa — mesma lógica do pipeline principal.
+    let ecuAbsTime = null;
+    if(dashTimeline && idx.gpsDate>=0 && idx.gpsTime>=0){
+      ecuAbsTime = buildAbsoluteTimeline(rows, idx.dt, idx.gpsDate, idx.gpsTime, idx.gpsSats, DASH_MIN_SATS).absTime;
+    }
+
+    // Despique de anomalia de ET (degrau + janela de expansão), mesma lógica do pipeline principal —
+    // antes a calibração só checava min/máx pontual, sem isso.
+    const N = rows.length;
+    const etVals = new Array(N);
+    for(let i=0;i<N;i++) etVals[i] = num(rows[i], idx.et);
+    const etBad = new Array(N).fill(false);
+    for(let i=0;i<N;i++){
+      const e = etVals[i]; let bad=false;
+      if(isNaN(e)) bad=true;
+      else if(e<params.etMin || e>params.etMax) bad=true;
+      else if(i>0 && !isNaN(etVals[i-1]) && Math.abs(e-etVals[i-1])>params.etMaxDelta) bad=true;
+      etBad[i]=bad;
+    }
+    const etExcluded = etBad.slice();
+    for(let i=0;i<N;i++){ if(etBad[i]){ const lo=Math.max(0,i-params.etWindow), hi=Math.min(N-1,i+params.etWindow); for(let k=lo;k<=hi;k++) etExcluded[k]=true; } }
 
     // despique de salto de GPS Speed, mesma lógica do pipeline principal
     const gsExcluded = new Array(rows.length).fill(false);
@@ -2084,6 +2163,7 @@ function recomputeCalibSamples(tag, gearWanted, params){
     }
 
     for(let i=0;i<rows.length;i++){
+      if(etExcluded[i]) continue;
       const gearN = num(rows[i], idx.gear);
       if(Math.round(gearN)!==gearWanted) continue;
       const tp = num(rows[i], idx.tp);
@@ -2115,7 +2195,14 @@ function recomputeCalibSamples(tag, gearWanted, params){
         if(gr>0) v = (rpm/(gr*params.diffRatio))*(2*Math.PI*params.tireRadius)/60;
       }
       if(isNaN(v) || v<=0) continue;
-      const F = params.mass*params.inertiaFactor*a + 0.5*params.rho*params.cda*v*v + params.crr*params.mass*gAll;
+      let F = params.mass*params.inertiaFactor*a + 0.5*params.rho*params.cda*v*v + params.crr*params.mass*gAll;
+      if(params.applyGradeCorrection && dashTimeline && ecuAbsTime && !isNaN(ecuAbsTime[i])){
+        const g = dashTimeline.gradeAt(ecuAbsTime[i]);
+        if(!isNaN(g)){
+          const theta = Math.atan(g/100);
+          F += params.mass*gAll*Math.sin(theta);
+        }
+      }
       const pW = F*v;
       const pHP = pW/745.7;
       const pkW = pW/1000;
