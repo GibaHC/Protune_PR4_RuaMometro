@@ -110,7 +110,14 @@
   }
   .subgrp h3{
     font-size:11px; color:var(--amber); text-transform:uppercase; letter-spacing:.8px; margin:0 0 10px;
+    cursor:pointer; user-select:none; display:flex; align-items:center; gap:7px;
   }
+  .subgrp h3:hover{ color:#ff8b39; }
+  .subgrp h3 .chevron{
+    display:inline-block; font-size:10px; transition:transform .15s; color:var(--dim);
+  }
+  .subgrp.collapsed h3 .chevron{ transform:rotate(-90deg); }
+  .subgrp.collapsed .subgrp-body{ display:none; }
   .btn{
     background:var(--amber); color:#1a1206; border:none; border-radius:7px; padding:10px 18px;
     font-weight:650; font-size:13px; cursor:pointer; font-family:var(--ui);
@@ -1746,6 +1753,26 @@ document.getElementById('btnReset').addEventListener('click', ()=>{
   document.getElementById('calibSection').style.display='none';
   document.getElementById('btnProcess').disabled = true;
   document.getElementById('statusMsg').textContent = '';
+});
+
+// ---------- seções de parâmetros recolhíveis ----------
+// Envolve tudo depois do <h3> de cada .subgrp num wrapper, pra poder esconder/mostrar sem
+// precisar reescrever o HTML de cada bloco à mão. Começa tudo recolhido — abre só o que o
+// usuário clicar.
+document.querySelectorAll('.subgrp').forEach(grp=>{
+  const h3 = grp.querySelector('h3');
+  if(!h3) return;
+  const body = document.createElement('div');
+  body.className = 'subgrp-body';
+  const rest = Array.from(grp.children).filter(el=>el!==h3);
+  rest.forEach(el=>body.appendChild(el));
+  grp.appendChild(body);
+  const chevron = document.createElement('span');
+  chevron.className = 'chevron';
+  chevron.textContent = '▾';
+  h3.appendChild(chevron);
+  grp.classList.add('collapsed');
+  h3.addEventListener('click', ()=>grp.classList.toggle('collapsed'));
 });
 
 // ---------- tabs (escopados por grupo, para suportar múltiplos blocos de abas na página) ----------
