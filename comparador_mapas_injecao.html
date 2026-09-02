@@ -142,6 +142,15 @@
     padding:10px 14px; font-size:12px; color:var(--dim); line-height:1.5; margin-bottom:14px;
   }
   .empty{ color:var(--dimmer); font-size:12.5px; padding:20px 0; text-align:center; }
+  .gear-filter{
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    background:var(--surface2); border-radius:6px; padding:8px 12px; margin-bottom:14px; font-size:12px;
+  }
+  .gear-filter .gf-label{ color:var(--dim); font-size:10.5px; text-transform:uppercase; letter-spacing:.6px; }
+  .gear-filter label{ display:flex; align-items:center; gap:5px; cursor:pointer; }
+  .gear-filter input[type=checkbox]{ accent-color:var(--amber); width:14px; height:14px; }
+  .gear-filter input[type=checkbox]:disabled + span{ color:var(--dimmer); }
+  .gear-filter label:has(input:disabled){ cursor:not-allowed; }
   .flag{ font-size:10.5px; padding:1px 6px; border-radius:4px; margin-right:4px; display:inline-block; margin-bottom:2px; }
   .flag-power{ background:#132a1e; color:var(--green); }
   .flag-nopower{ background:#2a1414; color:var(--red); }
@@ -402,7 +411,7 @@
         <div class="field">
           <label>Fonte do λ_target</label>
           <select id="p_lambdasrc">
-            <option value="fixed">Valor fixo acima</option>
+            <option value="fixed">Valor fixo de "Lambda alvo"</option>
             <option value="log" selected>Canal "Lambda Target" do log</option>
           </select>
           <div class="note">"canal do log" usa o Lambda Target reportado pela própria ECU amostra a amostra (acompanha as compensações do mapa, ex. por RPM/carga); cai automaticamente para o valor de "Lambda alvo" se o canal estiver ausente do arquivo ou zerado numa amostra específica</div>
@@ -556,6 +565,7 @@
 <section id="resultsSection" style="display:none;">
   <div class="card">
     <h2><span class="idx">03</span> Resultados comparativos</h2>
+    <div id="gearFilterWot" class="gear-filter"></div>
     <div class="tabs">
       <div class="tab active" data-tab="score">Escore composto</div>
       <div class="tab" data-tab="power">Potência estimada</div>
@@ -597,6 +607,7 @@
   <div class="card">
     <h2><span class="idx">04</span> Resultados em carga média (parcial)</h2>
     <div class="note-box">Mesma metodologia da aba anterior, aplicada à faixa de TP/Pedal definida em "Faixa de carga média (parcial)" (seção 02) — amostras fora do WOT, mas dentro dessa janela de carga parcial. Útil para avaliar a fase de injeção em condições de rua/cruzeiro sob carga, não só em WOT.</div>
+    <div id="gearFilterMid" class="gear-filter"></div>
     <div class="tabs">
       <div class="tab active" data-tab="scoreMid">Escore composto</div>
       <div class="tab" data-tab="powerMid">Potência estimada</div>
@@ -1650,12 +1661,20 @@ function aggregate(fileResults, params, sampleKey){
   tags.forEach(t=>byTag[t].forEach(s=>binSet.add(s.bin)));
   const bins = Array.from(binSet).sort((a,b)=>a-b);
 
+  const stat = computeStatFromByTag(byTag, tags, bins, params);
+  return {tags, bins, stat, byTag};
+}
+
+// Calcula a tabela de estatísticas (n, RPI/AEP, potência, torque, escore) a partir de um
+// byTag já pronto. Separado de aggregate() pra poder ser chamado de novo só com um
+// subconjunto de amostras (ex.: filtro de marcha nos gráficos) sem reprocessar os arquivos.
+function computeStatFromByTag(byTag, tags, bins, params){
   // per tag per bin stats
   const stat = {}; // tag -> bin -> {n, rpi, aep, pHP, torqueNm, nPower, lambda, gft, fct, inj}
   tags.forEach(t=>{
     stat[t] = {};
     bins.forEach(b=>{
-      const rowsInBin = byTag[t].filter(s=>s.bin===b);
+      const rowsInBin = (byTag[t]||[]).filter(s=>s.bin===b);
       const powerRows = rowsInBin.filter(s=>s.usePower && !isNaN(s.pHP));
       stat[t][b] = {
         n: rowsInBin.length,
@@ -1714,7 +1733,19 @@ function aggregate(fileResults, params, sampleKey){
     });
   });
 
-  return {tags, bins, stat, byTag};
+  return stat;
+}
+
+// Recalcula o stat de um agg já existente, restrito às marchas selecionadas — usado pelo
+// filtro de marcha acima dos gráficos. Não mexe no byTag original (fonte da verdade continua
+// com todas as marchas), só filtra na hora de montar a estatística exibida.
+function applyGearFilterToAgg(agg, selectedGears){
+  if(!agg) return;
+  const filteredByTag = {};
+  agg.tags.forEach(t=>{
+    filteredByTag[t] = agg.byTag[t].filter(s=>selectedGears.has(Math.round(s.gear)));
+  });
+  agg.stat = computeStatFromByTag(filteredByTag, agg.tags, agg.bins, agg._params);
 }
 
 // ---------- process button ----------
@@ -1796,6 +1827,11 @@ const charts = {}; // chave: 'Score'/'Power' + sufixo ('' para WOT, 'Mid' para c
 function fmt(v, d){ return isNaN(v)||v===undefined||v===null ? '—' : v.toFixed(d===undefined?2:d); }
 
 function renderResults(){
+  renderGearFilterRow('gearFilterWot', aggregated, ()=>{
+    renderScoreTab(aggregated, '');
+    renderPowerTab(aggregated, '');
+    renderLambdaTab(aggregated, '');
+  });
   renderScoreTab(aggregated, '');
   renderPowerTab(aggregated, '');
   renderLambdaTab(aggregated, '');
@@ -1803,9 +1839,50 @@ function renderResults(){
 }
 
 function renderMidResults(){
+  renderGearFilterRow('gearFilterMid', aggregatedMid, ()=>{
+    renderScoreTab(aggregatedMid, 'Mid');
+    renderPowerTab(aggregatedMid, 'Mid', aggregated);
+    renderLambdaTab(aggregatedMid, 'Mid');
+  });
   renderScoreTab(aggregatedMid, 'Mid');
   renderPowerTab(aggregatedMid, 'Mid', aggregated);
   renderLambdaTab(aggregatedMid, 'Mid');
+}
+
+// Monta a faixa de checkboxes de marcha acima dos gráficos de uma seção (WOT ou carga média).
+// A 1ª marcha vem desabilitada e desmarcada se o filtro de ruído "excluir 1ª marcha" (seção 02)
+// estiver ligado — não faz sentido oferecer um filtro pra marcha que já foi descartada na
+// origem, não teria amostra nenhuma pra mostrar.
+function renderGearFilterRow(containerId, agg, onChange){
+  const container = document.getElementById(containerId);
+  if(!container || !agg) return;
+  const firstGearBlocked = document.getElementById('p_gearfilter').checked;
+
+  const prevState = {};
+  container.querySelectorAll('input[type=checkbox]').forEach(cb=>{ prevState[cb.dataset.gear] = cb.checked; });
+
+  let html = '<span class="gf-label">Marchas</span>';
+  for(let g=1; g<=5; g++){
+    const disabled = (g===1 && firstGearBlocked);
+    const checked = disabled ? false : (prevState.hasOwnProperty(String(g)) ? prevState[String(g)] : true);
+    html += `<label title="${disabled?'1ª marcha já excluída pelo filtro de ruído (seção 02)':''}"><input type="checkbox" data-gear="${g}" ${checked?'checked':''} ${disabled?'disabled':''}><span>${g}ª</span></label>`;
+  }
+  container.innerHTML = html;
+
+  function currentSelection(){
+    const sel = new Set();
+    container.querySelectorAll('input[type=checkbox]').forEach(cb=>{ if(cb.checked) sel.add(parseInt(cb.dataset.gear,10)); });
+    return sel;
+  }
+
+  container.querySelectorAll('input[type=checkbox]').forEach(cb=>{
+    cb.addEventListener('change', ()=>{
+      applyGearFilterToAgg(agg, currentSelection());
+      onChange();
+    });
+  });
+
+  applyGearFilterToAgg(agg, currentSelection());
 }
 
 // tag com melhor potência medida no bin, entre os que têm confiança >= Média — usado para
