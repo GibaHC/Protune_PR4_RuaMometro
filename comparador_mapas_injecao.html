@@ -105,6 +105,7 @@
     border-radius:6px; padding:7px 9px; font-family:var(--mono); font-size:12.5px;
   }
   .field input:focus, .field select:focus{ outline:1px solid var(--amber); border-color:var(--amber); }
+  .field input:disabled{ opacity:.4; cursor:not-allowed; }
   .subgrp{
     border-top:1px solid var(--line); margin-top:16px; padding-top:14px;
   }
@@ -1362,6 +1363,19 @@ document.getElementById('p_weight').addEventListener('input', e=>{
   const v = parseInt(e.target.value);
   document.getElementById('wLabel').textContent = v+'/'+(100-v);
 });
+
+// Desativa campos de preenchimento manual quando o seletor relacionado torna o valor
+// digitado irrelevante — evita a falsa impressão de que editar aquele número muda alguma coisa.
+function syncLambdaTargetField(){
+  document.getElementById('p_lambdatarget').disabled = (document.getElementById('p_lambdasrc').value === 'log');
+}
+function syncTrimPctField(){
+  document.getElementById('p_trimpct').disabled = (document.getElementById('p_statmethod').value !== 'trimmed');
+}
+document.getElementById('p_lambdasrc').addEventListener('change', syncLambdaTargetField);
+document.getElementById('p_statmethod').addEventListener('change', syncTrimPctField);
+syncLambdaTargetField();
+syncTrimPctField();
 
 // ---------- per-file processing ----------
 function num(row, i){ if(i<0) return NaN; const v = parseFloat(row[i]); return v; }
