@@ -1969,7 +1969,23 @@ function renderPowerTab(agg, suffix, refAgg){
   const hideLow = agg._params.hideLowConfidenceInCharts;
   const canvas = document.getElementById('chartPower'+suffix);
   const anyPower = tags.some(t=>bins.some(b=>!isNaN(stat[t][b].pHP)));
+
+  // Mensagem de "sem dado" como irmã do canvas, criada uma vez e reaproveitada — nunca remove
+  // o <canvas> do DOM (removê-lo quebrava a próxima renderização, já que getElementById não
+  // achava mais o elemento depois).
+  let emptyMsg = document.getElementById('chartPower'+suffix+'Empty');
+  if(!emptyMsg){
+    emptyMsg = document.createElement('div');
+    emptyMsg.id = 'chartPower'+suffix+'Empty';
+    emptyMsg.className = 'empty';
+    emptyMsg.textContent = 'Nenhum arquivo habilitado tem canais de potência utilizáveis nesta faixa (ou nenhuma marcha selecionada acima).';
+    emptyMsg.style.display = 'none';
+    canvas.parentElement.appendChild(emptyMsg);
+  }
+
   if(anyPower){
+    canvas.style.display = '';
+    emptyMsg.style.display = 'none';
     const ctxP = canvas.getContext('2d');
     if(charts['Power'+suffix]) charts['Power'+suffix].destroy();
     charts['Power'+suffix] = new Chart(ctxP, {
@@ -1991,7 +2007,9 @@ function renderPowerTab(agg, suffix, refAgg){
       }
     });
   } else {
-    canvas.parentElement.innerHTML = '<div class="empty">Nenhum arquivo habilitado tem canais de potência utilizáveis nesta faixa.</div>';
+    if(charts['Power'+suffix]){ charts['Power'+suffix].destroy(); charts['Power'+suffix]=null; }
+    canvas.style.display = 'none';
+    emptyMsg.style.display = '';
   }
 
   let hPow = '<thead><tr><th>Bin RPM</th>'+tags.map(t=>`<th style="color:${colorForTag(t)}">${t}</th>`).join('')+'</tr></thead><tbody>';
