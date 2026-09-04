@@ -1616,17 +1616,27 @@ function mergeSnapshotIntoCurrent(id){
     aggregatedMid = {tags:[], bins:[], byTag:{}, stat:{}, _params: aggregated._params, _fileResults: []};
   }
 
+  // Rebina cada amostra pro tamanho de bin ATUAL (não o que estava ativo quando a sessão foi
+  // salva) — usa o rpm bruto, já guardado por amostra, pra recalcular o bin. Sem isso, uma
+  // sessão salva com bin de 500 rpm não alinha na grade se você mudar pra 250 rpm depois,
+  // e o gráfico fica com buracos onde só as amostras "antigas" existiriam.
+  function rebin(samples, binSize){
+    return samples.map(s=>Object.assign({}, s, { bin: Math.floor(s.rpm/binSize)*binSize }));
+  }
+
   entry.tags.forEach(tag=>{
     const newTag = `${tag} [${entry.name}]`;
     ensureTagInOrder(newTag);
 
-    aggregated.byTag[newTag] = (entry.wotByTag[tag]||[]).slice();
+    const wotRebinned = rebin(entry.wotByTag[tag]||[], aggregated._params.binSize);
+    aggregated.byTag[newTag] = wotRebinned;
     if(!aggregated.tags.includes(newTag)) aggregated.tags.push(newTag);
-    (entry.wotByTag[tag]||[]).forEach(s=>{ if(!aggregated.bins.includes(s.bin)) aggregated.bins.push(s.bin); });
+    wotRebinned.forEach(s=>{ if(!aggregated.bins.includes(s.bin)) aggregated.bins.push(s.bin); });
 
-    aggregatedMid.byTag[newTag] = (entry.midByTag[tag]||[]).slice();
+    const midRebinned = rebin(entry.midByTag[tag]||[], aggregatedMid._params.binSize);
+    aggregatedMid.byTag[newTag] = midRebinned;
     if(!aggregatedMid.tags.includes(newTag)) aggregatedMid.tags.push(newTag);
-    (entry.midByTag[tag]||[]).forEach(s=>{ if(!aggregatedMid.bins.includes(s.bin)) aggregatedMid.bins.push(s.bin); });
+    midRebinned.forEach(s=>{ if(!aggregatedMid.bins.includes(s.bin)) aggregatedMid.bins.push(s.bin); });
   });
   aggregated.bins.sort((a,b)=>a-b);
   aggregatedMid.bins.sort((a,b)=>a-b);
@@ -1643,7 +1653,25 @@ function mergeSnapshotIntoCurrent(id){
   renderResults();
   renderMidResults();
 
-  document.getElementById('mapSnapshotStatus').textContent = `mesclado: "${entry.name}" (${entry.tags.length} mapa(s) adicionados como [${entry.name}])`;
+  // Alerta se os parâmetros físicos de hoje divergem dos que estavam ativos quando a sessão
+  // foi salva — rebinar não recalcula potência/força, então isso continua congelado do
+  // momento do save, mesmo que a grade de RPM agora esteja alinhada.
+  const physicsKeys = [
+    ['cda','Cx·A'], ['inertiaFactor','inércia'], ['mass','massa'], ['crr','Crr'],
+    ['accelUnit','unidade de aceleração']
+  ];
+  const diffs = [];
+  if(entry.paramsSnapshot){
+    physicsKeys.forEach(([k,label])=>{
+      const oldV = entry.paramsSnapshot[k], newV = aggregated._params[k];
+      if(oldV!==undefined && newV!==undefined && oldV!==newV) diffs.push(`${label} (${oldV}→${newV})`);
+    });
+  }
+  const binNote = `bin realinhado para ${aggregated._params.binSize} rpm`;
+  const diffNote = diffs.length
+    ? ` — atenção: ${diffs.join(', ')} mudou(aram) desde que essa sessão foi salva; a potência/torque dela continua calculada com os valores antigos, só o agrupamento por rpm foi atualizado`
+    : '';
+  document.getElementById('mapSnapshotStatus').innerHTML = `mesclado: "${entry.name}" (${entry.tags.length} mapa(s) adicionados como [${entry.name}], ${binNote})${diffNote}`;
 }
 
 function deleteSavedMap(id){
