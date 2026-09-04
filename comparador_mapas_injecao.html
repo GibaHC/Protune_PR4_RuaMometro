@@ -730,6 +730,30 @@
   </div>
 </section>
 
+<section>
+  <div class="card">
+    <h2><span class="idx">07</span> Salvar/carregar mapas calculados</h2>
+    <div class="note-box">
+      Salva as amostras já filtradas e enriquecidas (WOT + carga parcial, com potência/escore/rampa já calculados) dos mapas processados agora — não salva os CSVs brutos. "Carregar" mescla o que foi salvo com o que já está na tela, sem precisar recarregar os arquivos originais; os mapas carregados entram com o nome da sessão salva entre colchetes, pra não colidir com um mapa de mesmo nome que você processar depois (ex.: comparar `base` de antes de uma mudança com um `base` novo).
+    </div>
+    <div class="grid-params">
+      <div class="field">
+        <label>Nome da sessão a salvar</label>
+        <input type="text" id="mapSnapshotName" placeholder="ex.: antes_troca_motor">
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <button class="btn" id="btnSaveMaps">Salvar mapas calculados atuais</button>
+      <span class="sub" id="mapSnapshotStatus"></span>
+    </div>
+    <div class="tablewrap" style="margin-top:16px;">
+      <table id="savedMapsTable" style="display:none;"></table>
+    </div>
+    <div id="noSavedMaps" class="empty" style="font-size:12px;">Nenhum mapa salvo ainda neste navegador.</div>
+    <div class="sub" id="savedMapsTotalSize" style="margin-top:8px;"></div>
+  </div>
+</section>
+
 </div>
 
 <footer>processamento local · nenhum dado sai do navegador</footer>
@@ -1528,6 +1552,140 @@ document.getElementById('btnResetParams').addEventListener('click', ()=>{
     document.getElementById('paramsStorageStatus').textContent = `perfil salvo aplicado automaticamente (salvo às ${fmtSavedAt(payload.savedAt)})`;
   }
 })();
+
+// ---------- salvar/carregar/apagar mapas já calculados (localStorage) ----------
+const MAPS_STORAGE_KEY = 'comparador_mapas_injecao_saved_maps_v1';
+
+function loadSavedMapsList(){
+  try{
+    const raw = localStorage.getItem(MAPS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch(e){ return []; }
+}
+function writeSavedMapsList(list){
+  try{ localStorage.setItem(MAPS_STORAGE_KEY, JSON.stringify(list)); return true; } catch(e){ return false; }
+}
+function fmtBytes(n){
+  if(n<1024) return n+' B';
+  if(n<1024*1024) return (n/1024).toFixed(1)+' KB';
+  return (n/(1024*1024)).toFixed(2)+' MB';
+}
+
+function saveCurrentMapsSnapshot(){
+  const nameInput = document.getElementById('mapSnapshotName');
+  const name = nameInput.value.trim();
+  const statusEl = document.getElementById('mapSnapshotStatus');
+  if(!name){ statusEl.textContent = 'dê um nome pra sessão antes de salvar'; return; }
+  if(!aggregated || !aggregated.tags.length){ statusEl.textContent = 'processe algum log primeiro (seção 03) antes de salvar'; return; }
+
+  const wotByTag = {}, midByTag = {};
+  aggregated.tags.forEach(t=>{ wotByTag[t] = aggregated.byTag[t] || []; });
+  if(aggregatedMid){ aggregated.tags.forEach(t=>{ midByTag[t] = aggregatedMid.byTag[t] || []; }); }
+
+  const entry = {
+    id: 'snap'+Date.now(),
+    name, savedAt: new Date().toISOString(),
+    tags: aggregated.tags.slice(),
+    wotByTag, midByTag,
+    paramsSnapshot: aggregated._params
+  };
+  const sizeBytes = new Blob([JSON.stringify(entry)]).size;
+  entry.sizeBytes = sizeBytes;
+
+  const list = loadSavedMapsList();
+  list.push(entry);
+  const ok = writeSavedMapsList(list);
+  if(!ok){
+    statusEl.textContent = 'não foi possível salvar — armazenamento local cheio ou bloqueado. Tente apagar sessões salvas antigas.';
+    return;
+  }
+  statusEl.textContent = `salvo: "${name}" (${fmtBytes(sizeBytes)}, ${entry.tags.length} mapa(s))`;
+  nameInput.value = '';
+  renderSavedMapsTable();
+}
+
+function mergeSnapshotIntoCurrent(id){
+  const list = loadSavedMapsList();
+  const entry = list.find(e=>e.id===id);
+  if(!entry) return;
+
+  if(!aggregated){
+    aggregated = {tags:[], bins:[], byTag:{}, stat:{}, _params: getParams(), _fileResults: []};
+  }
+  if(!aggregatedMid){
+    aggregatedMid = {tags:[], bins:[], byTag:{}, stat:{}, _params: aggregated._params, _fileResults: []};
+  }
+
+  entry.tags.forEach(tag=>{
+    const newTag = `${tag} [${entry.name}]`;
+    ensureTagInOrder(newTag);
+
+    aggregated.byTag[newTag] = (entry.wotByTag[tag]||[]).slice();
+    if(!aggregated.tags.includes(newTag)) aggregated.tags.push(newTag);
+    (entry.wotByTag[tag]||[]).forEach(s=>{ if(!aggregated.bins.includes(s.bin)) aggregated.bins.push(s.bin); });
+
+    aggregatedMid.byTag[newTag] = (entry.midByTag[tag]||[]).slice();
+    if(!aggregatedMid.tags.includes(newTag)) aggregatedMid.tags.push(newTag);
+    (entry.midByTag[tag]||[]).forEach(s=>{ if(!aggregatedMid.bins.includes(s.bin)) aggregatedMid.bins.push(s.bin); });
+  });
+  aggregated.bins.sort((a,b)=>a-b);
+  aggregatedMid.bins.sort((a,b)=>a-b);
+  applyTagOrder(aggregated);
+  applyTagOrder(aggregatedMid);
+
+  aggregated.stat = computeStatFromByTag(aggregated.byTag, aggregated.tags, aggregated.bins, aggregated._params);
+  aggregatedMid.stat = computeStatFromByTag(aggregatedMid.byTag, aggregatedMid.tags, aggregatedMid.bins, aggregatedMid._params);
+
+  document.getElementById('resultsSection').style.display='block';
+  document.getElementById('midloadSection').style.display='block';
+  document.getElementById('calibSection').style.display='block';
+  populateCalibTagSelect();
+  renderResults();
+  renderMidResults();
+
+  document.getElementById('mapSnapshotStatus').textContent = `mesclado: "${entry.name}" (${entry.tags.length} mapa(s) adicionados como [${entry.name}])`;
+}
+
+function deleteSavedMap(id){
+  const list = loadSavedMapsList().filter(e=>e.id!==id);
+  writeSavedMapsList(list);
+  renderSavedMapsTable();
+}
+
+function renderSavedMapsTable(){
+  const list = loadSavedMapsList();
+  const table = document.getElementById('savedMapsTable');
+  const empty = document.getElementById('noSavedMaps');
+  const totalEl = document.getElementById('savedMapsTotalSize');
+  if(!list.length){
+    table.style.display='none'; empty.style.display='block'; totalEl.textContent=''; return;
+  }
+  table.style.display='table'; empty.style.display='none';
+  let h = '<thead><tr><th>Sessão</th><th>Salvo em</th><th>Mapas</th><th>Tamanho</th><th></th></tr></thead><tbody>';
+  list.forEach(e=>{
+    h += `<tr><td>${e.name}</td><td>${fmtSavedAt(e.savedAt)}</td><td>${e.tags.join(', ')}</td><td>${fmtBytes(e.sizeBytes||0)}</td>
+      <td>
+        <button class="btn secondary loadMapBtn" data-id="${e.id}" style="padding:4px 10px;font-size:11px;">Carregar</button>
+        <button class="btn secondary deleteMapBtn" data-id="${e.id}" style="padding:4px 10px;font-size:11px;">Apagar</button>
+      </td></tr>`;
+  });
+  h += '</tbody>';
+  table.innerHTML = h;
+  const total = list.reduce((a,e)=>a+(e.sizeBytes||0), 0);
+  totalEl.textContent = `${list.length} sessão(ões) salva(s), ${fmtBytes(total)} no total (localStorage costuma ter ~5-10MB de limite por navegador, dividido com o perfil de parâmetros)`;
+
+  table.querySelectorAll('.loadMapBtn').forEach(btn=>{
+    btn.addEventListener('click', e=>mergeSnapshotIntoCurrent(e.target.dataset.id));
+  });
+  table.querySelectorAll('.deleteMapBtn').forEach(btn=>{
+    btn.addEventListener('click', e=>{
+      if(confirm('Apagar esta sessão salva? Não dá pra desfazer.')) deleteSavedMap(e.target.dataset.id);
+    });
+  });
+}
+
+document.getElementById('btnSaveMaps').addEventListener('click', saveCurrentMapsSnapshot);
+renderSavedMapsTable();
 
 // ---------- per-file processing ----------
 function num(row, i){ if(i<0) return NaN; const v = parseFloat(row[i]); return v; }
