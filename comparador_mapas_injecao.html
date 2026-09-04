@@ -223,6 +223,13 @@
     </div>
     <input type="file" id="fileInput" accept=".csv" multiple>
 
+    <div id="uploadProgressWrap" style="display:none; margin-top:14px;">
+      <div style="background:var(--surface2); border-radius:6px; height:8px; overflow:hidden;">
+        <div id="uploadProgressBar" style="background:var(--amber); height:100%; width:0%; transition:width .1s;"></div>
+      </div>
+      <div id="uploadProgressLabel" class="sub" style="margin-top:6px;"></div>
+    </div>
+
     <div class="filelist-layout">
       <div class="filelist-main">
         <div class="tablewrap" style="margin-top:16px;">
@@ -708,6 +715,21 @@
   </div>
 </section>
 
+<section>
+  <div class="card">
+    <h2><span class="idx">06</span> Salvar/carregar parâmetros</h2>
+    <div class="note-box">
+      Salva todos os campos de parâmetro (seções 02 e 05) no navegador deste computador — não sai da máquina, não é enviado a lugar nenhum. Ao abrir a página de novo, se houver um perfil salvo, ele é aplicado automaticamente. "Padrão" volta aos valores originais desta versão da ferramenta, não ao último perfil salvo.
+    </div>
+    <div class="row">
+      <button class="btn" id="btnSaveParams">Salvar</button>
+      <button class="btn secondary" id="btnLoadParams">Carregar</button>
+      <button class="btn secondary" id="btnResetParams">Padrão</button>
+      <span class="sub" id="paramsStorageStatus"></span>
+    </div>
+  </div>
+</section>
+
 </div>
 
 <footer>processamento local · nenhum dado sai do navegador</footer>
@@ -842,42 +864,80 @@ fileInput.addEventListener('change', e=>handleFiles(e.target.files));
 
 function handleFiles(fileList){
   const arr = Array.from(fileList).filter(f=>/\.csv$/i.test(f.name));
+  if(!arr.length) return;
+
+  const progressWrap = document.getElementById('uploadProgressWrap');
+  const progressBar = document.getElementById('uploadProgressBar');
+  const progressLabel = document.getElementById('uploadProgressLabel');
+  const totalFiles = arr.length;
+  const totalSteps = totalFiles*2; // leitura + parse contam cada uma como metade do arquivo
+  let steps = 0;
+  progressWrap.style.display = 'block';
+  progressBar.style.width = '0%';
+  progressLabel.textContent = `lendo arquivos… 0/${totalFiles}`;
+
+  function tickStep(label, finalLabel){
+    steps++;
+    const pct = 100*steps/totalSteps;
+    progressBar.style.width = pct.toFixed(1)+'%';
+    if(steps<totalSteps){
+      progressLabel.textContent = label;
+    } else {
+      progressLabel.textContent = finalLabel || `concluído — ${totalFiles}/${totalFiles} arquivo(s) carregado(s)`;
+      setTimeout(()=>{ progressWrap.style.display = 'none'; }, 800);
+    }
+  }
+
   arr.forEach(f=>{
     const reader = new FileReader();
     reader.onload = ev=>{
-      const parsed = Papa.parse(ev.target.result, {skipEmptyLines:true});
-      const headers = parsed.data[0];
-      const rows = parsed.data.slice(1);
+      // metade 1: leitura do arquivo (bytes -> texto) concluída
+      tickStep(`lido: ${f.name} — parseando…`);
+      // setTimeout(0) cede o controle pro navegador repintar a barra antes do parse síncrono
+      // (Papa.parse pode travar a thread por um instante em arquivos grandes)
+      setTimeout(()=>{
+        const parsed = Papa.parse(ev.target.result, {skipEmptyLines:true});
+        const headers = parsed.data[0];
+        const rows = parsed.data.slice(1);
 
-      if(isDashFile(headers)){
+        if(isDashFile(headers)){
+          const rec = {
+            id: 'd'+(fileIdSeq++), name:f.name, headers, rows, N: rows.length
+          };
+          rec.summary = summarizeDashFile(rec);
+          dashFiles.push(rec);
+          renderDashFileTable();
+          renderFileTable(); // recalcula cobertura de altitude dos arquivos de ECU já carregados
+          document.getElementById('statusMsg').textContent = '';
+          document.getElementById('btnProcess').disabled = files.length===0;
+          // metade 2: parse + processamento concluídos
+          tickStep(`parseado: ${f.name}`);
+          return;
+        }
+
+        const idxAccel = headers.indexOf('Acceleration');
+        const idxGear = headers.indexOf('Analyzer Calculate Gear');
+        const idxRpm = headers.indexOf('Engine Speed');
+        const hasPowerChannels = idxAccel>=0 && idxGear>=0;
+        const qc = runQC(headers, rows, idxAccel, idxGear, idxRpm);
         const rec = {
-          id: 'd'+(fileIdSeq++), name:f.name, headers, rows, N: rows.length
+          id: 'f'+(fileIdSeq++), name:f.name, headers, rows,
+          tag: classify(f.name), sessionLabel: sessionLabel(f.name),
+          hasPowerChannels, usePower: hasPowerChannels && !qc.severe,
+          qc, N: rows.length
         };
-        rec.summary = summarizeDashFile(rec);
-        dashFiles.push(rec);
-        renderDashFileTable();
-        renderFileTable(); // recalcula cobertura de altitude dos arquivos de ECU já carregados
+        files.push(rec);
+        ensureTagInOrder(rec.tag);
+        renderFileTable();
         document.getElementById('statusMsg').textContent = '';
         document.getElementById('btnProcess').disabled = files.length===0;
-        return;
-      }
-
-      const idxAccel = headers.indexOf('Acceleration');
-      const idxGear = headers.indexOf('Analyzer Calculate Gear');
-      const idxRpm = headers.indexOf('Engine Speed');
-      const hasPowerChannels = idxAccel>=0 && idxGear>=0;
-      const qc = runQC(headers, rows, idxAccel, idxGear, idxRpm);
-      const rec = {
-        id: 'f'+(fileIdSeq++), name:f.name, headers, rows,
-        tag: classify(f.name), sessionLabel: sessionLabel(f.name),
-        hasPowerChannels, usePower: hasPowerChannels && !qc.severe,
-        qc, N: rows.length
-      };
-      files.push(rec);
-      ensureTagInOrder(rec.tag);
-      renderFileTable();
-      document.getElementById('statusMsg').textContent = '';
-      document.getElementById('btnProcess').disabled = files.length===0;
+        // metade 2: parse + processamento concluídos
+        tickStep(`parseado: ${f.name}`);
+      }, 0);
+    };
+    reader.onerror = ()=>{
+      tickStep(f.name+' (erro de leitura)');
+      tickStep(f.name+' (falhou)', undefined);
     };
     reader.readAsText(f);
   });
@@ -1376,6 +1436,98 @@ document.getElementById('p_lambdasrc').addEventListener('change', syncLambdaTarg
 document.getElementById('p_statmethod').addEventListener('change', syncTrimPctField);
 syncLambdaTargetField();
 syncTrimPctField();
+
+// ---------- salvar/carregar/resetar parâmetros (localStorage do navegador) ----------
+const PARAMS_STORAGE_KEY = 'comparador_mapas_injecao_params_v1';
+
+function getParamFields(){
+  return Array.from(document.querySelectorAll('[id^="p_"], [id^="c_"]'))
+    .filter(el => el.id !== 'c_tag'); // c_tag é populado em runtime a partir dos arquivos, não é um parâmetro salvável
+}
+
+function saveParamsToStorage(){
+  const data = {};
+  getParamFields().forEach(el=>{
+    data[el.id] = (el.type==='checkbox') ? el.checked : el.value;
+  });
+  const payload = { savedAt: new Date().toISOString(), data };
+  try{
+    localStorage.setItem(PARAMS_STORAGE_KEY, JSON.stringify(payload));
+    return payload;
+  } catch(e){
+    return null;
+  }
+}
+
+function applyParamsData(data){
+  getParamFields().forEach(el=>{
+    if(!(el.id in data)) return;
+    if(el.type==='checkbox') el.checked = !!data[el.id];
+    else el.value = data[el.id];
+  });
+  // Reaplica os efeitos colaterais dos campos que controlam outros (desabilitar, labels, etc.)
+  syncLambdaTargetField();
+  syncTrimPctField();
+  const wv = parseInt(document.getElementById('p_weight').value);
+  document.getElementById('wLabel').textContent = wv+'/'+(100-wv);
+  updateComboEstimate();
+}
+
+function loadParamsFromStorage(){
+  let raw;
+  try{ raw = localStorage.getItem(PARAMS_STORAGE_KEY); } catch(e){ return null; }
+  if(!raw) return null;
+  try{
+    const payload = JSON.parse(raw);
+    applyParamsData(payload.data);
+    return payload;
+  } catch(e){ return null; }
+}
+
+function resetParamsToDefault(){
+  getParamFields().forEach(el=>{
+    if(el.tagName==='SELECT'){
+      const def = Array.from(el.options).find(o=>o.defaultSelected);
+      if(def) el.value = def.value;
+    } else if(el.type==='checkbox'){
+      el.checked = el.defaultChecked;
+    } else {
+      el.value = el.defaultValue;
+    }
+  });
+  syncLambdaTargetField();
+  syncTrimPctField();
+  const wv = parseInt(document.getElementById('p_weight').value);
+  document.getElementById('wLabel').textContent = wv+'/'+(100-wv);
+  updateComboEstimate();
+}
+
+function fmtSavedAt(iso){
+  try{ return new Date(iso).toLocaleString('pt-BR'); } catch(e){ return iso; }
+}
+
+document.getElementById('btnSaveParams').addEventListener('click', ()=>{
+  const payload = saveParamsToStorage();
+  const el = document.getElementById('paramsStorageStatus');
+  el.textContent = payload ? `salvo às ${fmtSavedAt(payload.savedAt)}` : 'não foi possível salvar (armazenamento local bloqueado pelo navegador?)';
+});
+document.getElementById('btnLoadParams').addEventListener('click', ()=>{
+  const payload = loadParamsFromStorage();
+  const el = document.getElementById('paramsStorageStatus');
+  el.textContent = payload ? `carregado (salvo às ${fmtSavedAt(payload.savedAt)})` : 'nenhum perfil salvo encontrado neste navegador';
+});
+document.getElementById('btnResetParams').addEventListener('click', ()=>{
+  resetParamsToDefault();
+  document.getElementById('paramsStorageStatus').textContent = 'parâmetros restaurados ao padrão da ferramenta';
+});
+
+// auto-carrega ao abrir a página, se houver perfil salvo
+(function autoLoadParamsOnStartup(){
+  const payload = loadParamsFromStorage();
+  if(payload){
+    document.getElementById('paramsStorageStatus').textContent = `perfil salvo aplicado automaticamente (salvo às ${fmtSavedAt(payload.savedAt)})`;
+  }
+})();
 
 // ---------- per-file processing ----------
 function num(row, i){ if(i<0) return NaN; const v = parseFloat(row[i]); return v; }
