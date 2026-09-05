@@ -734,7 +734,7 @@
   <div class="card">
     <h2><span class="idx">07</span> Salvar/carregar mapas calculados</h2>
     <div class="note-box">
-      Salva as amostras já filtradas e enriquecidas (WOT + carga parcial, com potência/escore/rampa já calculados) dos mapas processados agora — não salva os CSVs brutos. "Carregar" mescla o que foi salvo com o que já está na tela, sem precisar recarregar os arquivos originais; os mapas carregados entram com o nome da sessão salva entre colchetes, pra não colidir com um mapa de mesmo nome que você processar depois (ex.: comparar `base` de antes de uma mudança com um `base` novo).
+      Salva o dado bruto por amostra (rpm, marcha, CVE, MAP, lambda, lambda alvo, injeção, trims, rampa, aceleração, velocidade e a densidade do ar daquele instante) num formato binário compacto — não o resultado pronto, e não o CSV original. Ao carregar, escore, AEP/RPI, bin e potência/torque são **recalculados com os parâmetros atuais** (Cx·A, inércia, massa, tamanho de bin, correção de rampa) — não ficam congelados no valor de quando foi salvo. O lambda alvo por amostra também é preservado, então o AEP recalculado é fiel ao que estava valendo no log original, mesmo quando a fonte era "canal do log" (que varia amostra a amostra). "Carregar" mescla com o que já está na tela — os mapas entram com o nome da sessão entre colchetes, pra não colidir com um mapa de mesmo nome que você processar depois (ex.: comparar `base` de antes de uma mudança com um `base` novo).
     </div>
     <div class="grid-params">
       <div class="field">
@@ -1554,7 +1554,89 @@ document.getElementById('btnResetParams').addEventListener('click', ()=>{
 })();
 
 // ---------- salvar/carregar/apagar mapas já calculados (localStorage) ----------
-const MAPS_STORAGE_KEY = 'comparador_mapas_injecao_saved_maps_v1';
+const MAPS_STORAGE_KEY = 'comparador_mapas_injecao_saved_maps_v3';
+
+// ---- Empacotamento binário compacto das amostras salvas ----
+// Guarda só o que não dá pra recalcular (dado bruto), não os resultados prontos: rpi/aep/bin
+// são recalculados na hora de carregar, a partir de cve/map/lambda/rpm + parâmetros atuais.
+// pHP/torqueNm idem, a partir de accel/v/rho (a densidade que estava valendo pra aquela
+// amostra especificamente, preservando o contexto de altitude/IAT do dia, mesmo sem guardar
+// altitude/IAT brutos). Não dá pra recuperar o Lambda Target por amostra quando a fonte era
+// "canal do log" — ao recarregar, AEP sempre usa o "Lambda alvo" fixo atual.
+const SNAPSHOT_FIELDS = ['rpm','gear','cve','map','lambda','lambdaTarget','inj','gft','fct','grade','accel','v','rho'];
+
+function float32ArrayToBase64(f32){
+  const bytes = new Uint8Array(f32.buffer, f32.byteOffset, f32.byteLength);
+  let binary = '';
+  const chunk = 0x8000;
+  for(let i=0;i<bytes.length;i+=chunk){
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i+chunk));
+  }
+  return btoa(binary);
+}
+function base64ToFloat32Array(b64){
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++) bytes[i] = binary.charCodeAt(i);
+  return new Float32Array(bytes.buffer);
+}
+
+function packSamplesBinary(samples){
+  const cols = SNAPSHOT_FIELDS.length;
+  const arr = new Float32Array(samples.length*cols);
+  samples.forEach((s,i)=>{
+    SNAPSHOT_FIELDS.forEach((f,j)=>{
+      const v = s[f];
+      arr[i*cols+j] = (v===undefined || v===null) ? NaN : v;
+    });
+  });
+  return { n: samples.length, cols, b64: float32ArrayToBase64(arr) };
+}
+
+// Reconstrói as amostras a partir do pacote binário, recalculando tudo que depende de
+// parâmetro com os valores ATUAIS (não os de quando foi salvo) — rpi/aep, bin, pHP/torqueNm.
+function unpackSamplesBinary(packed, currentParams){
+  if(!packed || !packed.n) return [];
+  const arr = base64ToFloat32Array(packed.b64);
+  const cols = packed.cols;
+  const gAll = 9.80665;
+  const out = [];
+  for(let i=0;i<packed.n;i++){
+    const row = {};
+    SNAPSHOT_FIELDS.forEach((f,j)=>{ row[f] = arr[i*cols+j]; });
+
+    let rpi = NaN, aep = NaN;
+    if(!isNaN(row.cve) && !isNaN(row.map)) rpi = row.cve*row.map*row.rpm/1e6;
+    // usa o λ_target salvo por amostra (fidelidade ao que estava ativo no log original,
+    // inclusive quando a fonte era "canal do log", que varia amostra a amostra); só cai
+    // pro "Lambda alvo" fixo de hoje se aquele valor específico não tiver sido salvo/válido
+    const ltPerSample = (!isNaN(row.lambdaTarget) && row.lambdaTarget>0) ? row.lambdaTarget : currentParams.lambdaTarget;
+    if(!isNaN(row.cve) && !isNaN(row.lambda) && row.lambda>0 && ltPerSample>0){
+      aep = row.cve/(row.lambda/ltPerSample);
+    }
+
+    let pHP = NaN, torqueNm = NaN;
+    if(!isNaN(row.accel) && !isNaN(row.v) && row.v>0 && !isNaN(row.rho)){
+      let F = currentParams.mass*currentParams.inertiaFactor*row.accel
+              + 0.5*row.rho*currentParams.cda*row.v*row.v
+              + currentParams.crr*currentParams.mass*gAll;
+      if(currentParams.applyGradeCorrection && !isNaN(row.grade)){
+        const theta = Math.atan(row.grade/100);
+        F += currentParams.mass*gAll*Math.sin(theta);
+      }
+      const pW = F*row.v;
+      pHP = pW/745.7;
+      torqueNm = (pW/1000)*9549/row.rpm;
+    }
+
+    row.bin = Math.floor(row.rpm/currentParams.binSize)*currentParams.binSize;
+    row.rpi = rpi; row.aep = aep; row.pHP = pHP; row.torqueNm = torqueNm;
+    row.usePower = !isNaN(pHP);
+    out.push(row);
+  }
+  return out;
+}
+
 
 function loadSavedMapsList(){
   try{
@@ -1578,15 +1660,15 @@ function saveCurrentMapsSnapshot(){
   if(!name){ statusEl.textContent = 'dê um nome pra sessão antes de salvar'; return; }
   if(!aggregated || !aggregated.tags.length){ statusEl.textContent = 'processe algum log primeiro (seção 03) antes de salvar'; return; }
 
-  const wotByTag = {}, midByTag = {};
-  aggregated.tags.forEach(t=>{ wotByTag[t] = aggregated.byTag[t] || []; });
-  if(aggregatedMid){ aggregated.tags.forEach(t=>{ midByTag[t] = aggregatedMid.byTag[t] || []; }); }
+  const wotPacked = {}, midPacked = {};
+  aggregated.tags.forEach(t=>{ wotPacked[t] = packSamplesBinary(aggregated.byTag[t] || []); });
+  if(aggregatedMid){ aggregated.tags.forEach(t=>{ midPacked[t] = packSamplesBinary(aggregatedMid.byTag[t] || []); }); }
 
   const entry = {
     id: 'snap'+Date.now(),
     name, savedAt: new Date().toISOString(),
     tags: aggregated.tags.slice(),
-    wotByTag, midByTag,
+    wotPacked, midPacked,
     paramsSnapshot: aggregated._params
   };
   const sizeBytes = new Blob([JSON.stringify(entry)]).size;
@@ -1616,27 +1698,22 @@ function mergeSnapshotIntoCurrent(id){
     aggregatedMid = {tags:[], bins:[], byTag:{}, stat:{}, _params: aggregated._params, _fileResults: []};
   }
 
-  // Rebina cada amostra pro tamanho de bin ATUAL (não o que estava ativo quando a sessão foi
-  // salva) — usa o rpm bruto, já guardado por amostra, pra recalcular o bin. Sem isso, uma
-  // sessão salva com bin de 500 rpm não alinha na grade se você mudar pra 250 rpm depois,
-  // e o gráfico fica com buracos onde só as amostras "antigas" existiriam.
-  function rebin(samples, binSize){
-    return samples.map(s=>Object.assign({}, s, { bin: Math.floor(s.rpm/binSize)*binSize }));
-  }
-
+  // Desempacota o binário recalculando rpi/aep/bin/pHP/torqueNm com os parâmetros ATUAIS
+  // (não os de quando a sessão foi salva) — inclusive o bin, então isso já resolve o
+  // desalinhamento de grade se o tamanho de bin mudou desde então.
   entry.tags.forEach(tag=>{
     const newTag = `${tag} [${entry.name}]`;
     ensureTagInOrder(newTag);
 
-    const wotRebinned = rebin(entry.wotByTag[tag]||[], aggregated._params.binSize);
-    aggregated.byTag[newTag] = wotRebinned;
+    const wotSamples = unpackSamplesBinary(entry.wotPacked[tag], aggregated._params);
+    aggregated.byTag[newTag] = wotSamples;
     if(!aggregated.tags.includes(newTag)) aggregated.tags.push(newTag);
-    wotRebinned.forEach(s=>{ if(!aggregated.bins.includes(s.bin)) aggregated.bins.push(s.bin); });
+    wotSamples.forEach(s=>{ if(!aggregated.bins.includes(s.bin)) aggregated.bins.push(s.bin); });
 
-    const midRebinned = rebin(entry.midByTag[tag]||[], aggregatedMid._params.binSize);
-    aggregatedMid.byTag[newTag] = midRebinned;
+    const midSamples = unpackSamplesBinary(entry.midPacked[tag], aggregatedMid._params);
+    aggregatedMid.byTag[newTag] = midSamples;
     if(!aggregatedMid.tags.includes(newTag)) aggregatedMid.tags.push(newTag);
-    midRebinned.forEach(s=>{ if(!aggregatedMid.bins.includes(s.bin)) aggregatedMid.bins.push(s.bin); });
+    midSamples.forEach(s=>{ if(!aggregatedMid.bins.includes(s.bin)) aggregatedMid.bins.push(s.bin); });
   });
   aggregated.bins.sort((a,b)=>a-b);
   aggregatedMid.bins.sort((a,b)=>a-b);
@@ -1653,25 +1730,11 @@ function mergeSnapshotIntoCurrent(id){
   renderResults();
   renderMidResults();
 
-  // Alerta se os parâmetros físicos de hoje divergem dos que estavam ativos quando a sessão
-  // foi salva — rebinar não recalcula potência/força, então isso continua congelado do
-  // momento do save, mesmo que a grade de RPM agora esteja alinhada.
-  const physicsKeys = [
-    ['cda','Cx·A'], ['inertiaFactor','inércia'], ['mass','massa'], ['crr','Crr'],
-    ['accelUnit','unidade de aceleração']
-  ];
-  const diffs = [];
-  if(entry.paramsSnapshot){
-    physicsKeys.forEach(([k,label])=>{
-      const oldV = entry.paramsSnapshot[k], newV = aggregated._params[k];
-      if(oldV!==undefined && newV!==undefined && oldV!==newV) diffs.push(`${label} (${oldV}→${newV})`);
-    });
-  }
-  const binNote = `bin realinhado para ${aggregated._params.binSize} rpm`;
-  const diffNote = diffs.length
-    ? ` — atenção: ${diffs.join(', ')} mudou(aram) desde que essa sessão foi salva; a potência/torque dela continua calculada com os valores antigos, só o agrupamento por rpm foi atualizado`
-    : '';
-  document.getElementById('mapSnapshotStatus').innerHTML = `mesclado: "${entry.name}" (${entry.tags.length} mapa(s) adicionados como [${entry.name}], ${binNote})${diffNote}`;
+  // Aviso informativo: agora quase tudo é recalculado com os parâmetros de hoje (inclusive
+  // Cx·A/inércia/densidade), então não há mais "valor congelado" — só o λ_target por amostra
+  // não é recuperável quando a fonte original era "canal do log" (não foi salvo por amostra).
+  document.getElementById('mapSnapshotStatus').innerHTML =
+    `mesclado: "${entry.name}" (${entry.tags.length} mapa(s) adicionados como [${entry.name}]) — recalculado com os parâmetros atuais (Cx·A, inércia, bin, correção de rampa etc.), preservando o λ_target por amostra do log original.`;
 }
 
 function deleteSavedMap(id){
@@ -1872,7 +1935,7 @@ function processFile(rec, params, dashTimeline){
       if(!isNaN(g)) grade = g;
     }
 
-    let pHP = NaN, torqueNm = NaN;
+    let pHP = NaN, torqueNm = NaN, accelMs2 = NaN, vMs = NaN, rhoUsed = NaN;
     if(rec.hasPowerChannels && rec.usePower){
       let a = num(rows[i], idx.accel);
       if(!isNaN(a) && params.accelUnit==='g') a = a*gAll;
@@ -1888,6 +1951,7 @@ function processFile(rec, params, dashTimeline){
       }
       if(!isNaN(v) && v>0 && !isNaN(a)){
         const rhoHere = rhoSample ? rhoSample[i] : params.rho;
+        accelMs2 = a; vMs = v; rhoUsed = rhoHere;
         let F = params.mass*params.inertiaFactor*a
                 + 0.5*rhoHere*params.cda*v*v
                 + params.crr*params.mass*gAll;
@@ -1908,7 +1972,8 @@ function processFile(rec, params, dashTimeline){
     return {
       rpm, bin: Math.floor(rpm/params.binSize)*params.binSize,
       gear: num(rows[i], idx.gear),
-      cve, map:mapv, lambda, inj, gft, fct, rpi, aep, pHP, torqueNm, grade
+      cve, map:mapv, lambda, lambdaTarget, inj, gft, fct, rpi, aep, pHP, torqueNm, grade,
+      accel: accelMs2, v: vMs, rho: rhoUsed
     };
   }
 
