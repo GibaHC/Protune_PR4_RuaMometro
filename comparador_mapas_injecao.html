@@ -1555,6 +1555,30 @@ document.getElementById('btnResetParams').addEventListener('click', ()=>{
 
 // ---------- salvar/carregar/apagar mapas já calculados (localStorage) ----------
 const MAPS_STORAGE_KEY = 'comparador_mapas_injecao_saved_maps_v3';
+// Chaves de versões anteriores, incompatíveis com o formato atual — mantenha essa lista
+// atualizada a cada vez que MAPS_STORAGE_KEY subir de versão, incluindo a chave que acabou
+// de ser aposentada. A limpeza roda sozinha no carregamento da página (ver
+// cleanupDeprecatedStorage), sem precisar de ação manual do usuário.
+const DEPRECATED_STORAGE_KEYS = [
+  'comparador_mapas_injecao_saved_maps_v1',
+  'comparador_mapas_injecao_saved_maps_v2',
+];
+
+function cleanupDeprecatedStorage(){
+  let freedBytes = 0;
+  const removedKeys = [];
+  DEPRECATED_STORAGE_KEYS.forEach(key=>{
+    try{
+      const raw = localStorage.getItem(key);
+      if(raw!==null){
+        freedBytes += new Blob([raw]).size;
+        localStorage.removeItem(key);
+        removedKeys.push(key);
+      }
+    } catch(e){ /* localStorage indisponível/bloqueado — silencioso, nada a limpar mesmo */ }
+  });
+  return {removedKeys, freedBytes};
+}
 
 // ---- Empacotamento binário compacto das amostras salvas ----
 // Guarda só o que não dá pra recalcular (dado bruto), não os resultados prontos: rpi/aep/bin
@@ -1776,6 +1800,18 @@ function renderSavedMapsTable(){
 }
 
 document.getElementById('btnSaveMaps').addEventListener('click', saveCurrentMapsSnapshot);
+
+// Limpa versões antigas e incompatíveis de armazenamento assim que a página carrega, antes de
+// desenhar a tabela — assim o espaço já vem liberado e a mensagem aparece na primeira leitura,
+// não só depois de alguma ação do usuário.
+(function cleanupOnStartup(){
+  const {removedKeys, freedBytes} = cleanupDeprecatedStorage();
+  if(removedKeys.length){
+    document.getElementById('mapSnapshotStatus').textContent =
+      `dados de versão(ões) anterior(es) e incompatível(eis) apagados automaticamente (${fmtBytes(freedBytes)} liberados) — formatos antigos de armazenamento não são lidos por esta versão da ferramenta.`;
+  }
+})();
+
 renderSavedMapsTable();
 
 // ---------- per-file processing ----------
