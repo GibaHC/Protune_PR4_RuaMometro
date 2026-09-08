@@ -503,6 +503,16 @@
           <label><input type="checkbox" id="p_gradecorrection" checked style="width:auto;margin-right:6px;vertical-align:middle;">Aplicar correção de rampa na potência estimada</label>
           <div class="note">F_tração += m·g·sen(θ). Corrige o viés de um canal "Acceleration" que mede aceleração cinemática do solo, não força específica de acelerômetro. Só em amostras com cobertura de altitude (dashboard); sem cobertura, sem correção.</div>
         </div>
+        <div class="field">
+          <label>Distância mínima da janela de grade (m)</label>
+          <input type="number" id="p_grademinddist" value="25" step="1">
+          <div class="note">grade% = Δaltitude / distância percorrida numa janela de ±1,5s. Em velocidade baixa essa distância encolhe e o ruído de altitude do GPS (tipicamente ±3-10m) passa a dominar o cálculo — confirmado com dado real do 08/18: abaixo de 2500rpm, metade das amostras tinha menos de 20m de distância na janela, com desvio-padrão de grade em torno de 6-8%. Abaixo deste piso, a amostra fica sem correção de rampa (não aplica um valor ruim). 25m é ponto de partida, não valor validado — subir reduz ruído mas também reduz cobertura em baixa rotação.</div>
+        </div>
+        <div class="field">
+          <label>Grade máximo plausível (%, ±)</label>
+          <input type="number" id="p_gradeplausmax" value="30" step="1">
+          <div class="note">segunda trava, independente da distância da janela — descarta grade calculado além deste limite como glitch de GPS (salto de posição/altitude), não rampa real. Confirmado com dado real: mesmo em janelas largas (≥50m), apareceu um valor de 121% de grade, fisicamente impossível numa estrada. 30% já é generoso (rampas reais raramente passam de 10-15%).</div>
+        </div>
       </div>
     </div>
 
@@ -1235,13 +1245,17 @@ function buildDashAltitudeTimeline(){
     const f=(t-a.t)/((b.t-a.t)||1);
     return { alt:a.alt+(b.alt-a.alt)*f, lat:a.lat+(b.lat-a.lat)*f, lon:a.lon+(b.lon-a.lon)*f };
   }
-  function gradeAt(t, halfWindow){
+  function gradeAt(t, halfWindow, minDist, plausMax){
     halfWindow = halfWindow || 1.5;
+    minDist = (minDist===undefined) ? 5 : minDist;
+    plausMax = (plausMax===undefined) ? Infinity : plausMax;
     const p1=altAt(t-halfWindow), p2=altAt(t+halfWindow);
     if(!p1||!p2) return NaN;
     const dist = haversineMeters(p1.lat,p1.lon,p2.lat,p2.lon);
-    if(dist<5) return NaN;
-    return (p2.alt-p1.alt)/dist*100;
+    if(dist<minDist) return NaN; // janela curta -> distância percorrida pequena -> ruído de altitude do GPS domina
+    const grade = (p2.alt-p1.alt)/dist*100;
+    if(Math.abs(grade)>plausMax) return NaN; // fora do plausível fisicamente -> provável glitch de GPS, não rampa real
+    return grade;
   }
   return {altAt, gradeAt, coverageStart: smoothed[0].t, coverageEnd: smoothed[smoothed.length-1].t};
 }
@@ -1431,6 +1445,8 @@ function getParams(){
     tpMaxDelta: parseFloat(document.getElementById('p_tpjump').value),
     tpJumpWindow: parseInt(document.getElementById('p_tpjumpwindow').value),
     applyGradeCorrection: document.getElementById('p_gradecorrection').checked,
+    gradeMinDist: parseFloat(document.getElementById('p_grademinddist').value),
+    gradePlausMax: parseFloat(document.getElementById('p_gradeplausmax').value),
     binSize: parseFloat(document.getElementById('p_bin').value),
     lambdaTarget: parseFloat(document.getElementById('p_lambdatarget').value),
     lambdaSrc: document.getElementById('p_lambdasrc').value,
@@ -1967,7 +1983,7 @@ function processFile(rec, params, dashTimeline){
 
     let grade = NaN;
     if(dashTimeline && ecuAbsTime && !isNaN(ecuAbsTime[i])){
-      const g = dashTimeline.gradeAt(ecuAbsTime[i]);
+      const g = dashTimeline.gradeAt(ecuAbsTime[i], 1.5, params.gradeMinDist, params.gradePlausMax);
       if(!isNaN(g)) grade = g;
     }
 
@@ -2821,7 +2837,7 @@ function getEligibleCalibRows(tag, gearWanted, params, dashTimeline){
       // se aplicável) — pré-computada aqui pra não recalcular a cada combinação da busca.
       let constF = params.crr*params.mass*gAll;
       if(params.applyGradeCorrection && dashTimeline && ecuAbsTime && !isNaN(ecuAbsTime[i])){
-        const g = dashTimeline.gradeAt(ecuAbsTime[i]);
+        const g = dashTimeline.gradeAt(ecuAbsTime[i], 1.5, params.gradeMinDist, params.gradePlausMax);
         if(!isNaN(g)){
           const theta = Math.atan(g/100);
           constF += params.mass*gAll*Math.sin(theta);
