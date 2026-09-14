@@ -1,15 +1,16 @@
-// ---------- state ----------
-let files = []; // {id,name, headers, rows, tag, sessionLabel, hasPowerChannels, usePower, qc, N}
+// ---------- estado global compartilhado ----------
+// Vive aqui (data.js) porque é o núcleo de dados do projeto; dom.js lê/mostra, calc.js só usa
+// o que já está processado (nunca modifica estes arrays/objetos diretamente).
+let files = []; // {id,name, headers, rows, tag, sessionLabel, hasPowerChannels, usePower, qc, N} — arquivos de ECU carregados
 let dashFiles = []; // {id,name,headers,rows,N,summary} — logs de dashboard, usados só para enriquecer com altitude/rampa
-let aggregated = null; // last processing result (WOT)
-let aggregatedMid = null; // last processing result (carga média / parcial)
+let aggregated = null; // último resultado de processamento (WOT) — ver aggregate()
+let aggregatedMid = null; // último resultado de processamento (carga média / parcial)
 let fileIdSeq = 0;
 let tagOrder = []; // ordem de exibição dos mapas nos gráficos/tabelas/legendas, controlada pelo usuário
 
-// Paleta rotativa para clusters/mapas descobertos dinamicamente a partir do nome do arquivo.
-// "base"/"vvt" sempre fica ciano (referência); os demais (soma_NN, tira_NN, ou qualquer
-// rótulo novo que apareça no nome do arquivo) recebem cor da paleta na ordem em que aparecem,
-// sem precisar tocar no código para novos testes (soma_60, tira_10, etc.).
+// Classifica um arquivo de ECU num "mapa" (tag) a partir do nome do arquivo: captura padrões
+// soma_NN/tira_NN/calib_NN (presente e futuro, com ou sem underscore/hífen), calib solto,
+// base/vvt, ou cai em "custom" se nada bater. É a base de tudo que agrupa/compara por mapa.
 function classify(filename){
   const f = filename.toLowerCase();
   // captura qualquer padrão "soma_NN" / "tira_NN" / "calib_NN" (com ou sem underscore/hífen), presente e futuro
@@ -76,6 +77,9 @@ function applyTagOrder(agg){
   agg.tags = ordered;
 }
 
+// Classifica um arquivo como dashboard (TDL) em vez de ECU: tem canal de altitude do GPS
+// e NÃO tem Corrected VE (canal exclusivo do log de ECU). Dashboards só servem pra enriquecer
+// os arquivos de ECU com altitude/rampa — nunca entram no processamento de potência/mapa.
 function isDashFile(headers){
   return headers.includes('GPS Altitude') && !headers.includes('Corrected VE');
 }
@@ -102,6 +106,12 @@ function buildAbsoluteTimeline(rows, idxDT, idxDate, idxTime, idxSats, minSats){
   return {absTime, sessionCount};
 }
 
+// Pressão barométrica medida pelo próprio sensor de MAP do carro: com o motor desligado
+// (RPM=0) e chave ligada, o coletor de admissão está exposto à pressão atmosférica ambiente
+// (sem o motor puxando vácuo) — o MAP é, nesse instante, um barômetro. Mais preciso que uma
+// altitude fixa assumida, porque captura a pressão real do dia (clima), não só a altitude.
+// Pega o trecho de RPM=0 contíguo a partir do início do arquivo (pré-partida) e usa a mediana
+// dos últimos ~3s desse trecho (mais perto do instante de partida, robusto a ruído).
 function detectPreCrankBaroKPa(rows, idxRpm, idxMap, idxDt){
   if(idxRpm<0 || idxMap<0) return NaN;
   let end = 0;
@@ -126,7 +136,9 @@ function detectPreCrankBaroKPa(rows, idxRpm, idxMap, idxDt){
   return vals[Math.floor(vals.length/2)];
 }
 
-// Pressão de saturação de vapor d'água (Magnus-Tetens), retorna kPa a partir de T em °C.
+// Parâmetros fixos do enriquecimento por dashboard: quantos satélites mínimos pra confiar num
+// ponto de GPS, tamanho da janela de suavização de altitude, e gap máximo de tempo (segundos)
+// além do qual não se interpola entre dois pontos (sem cobertura real, não inventa dado).
 const DASH_MIN_SATS = 4;
 const DASH_SMOOTH_WINDOW = 25; // pontos, ~0.5s a 50Hz
 const DASH_MAX_GAP_S = 5;      // além disso, considera sem cobertura
@@ -145,6 +157,9 @@ const FUTURE_CHANNELS = [
   {key:'oilTemp', col:'Engine Oil Temperature', label:'Engine Oil Temperature'},
 ];
 
+// Pra cada canal futuro, verifica se a coluna existe no cabeçalho e, se existir, se tem
+// algum valor real (não-zero) em qualquer linha — distingue "coluna presente mas zerada"
+// (sensor ainda não ligado na rede CAN) de "populada de verdade" (pronta pra uso).
 function checkFutureChannels(rec){
   return FUTURE_CHANNELS.map(fc=>{
     const idx = rec.headers.indexOf(fc.col);
@@ -158,6 +173,8 @@ function checkFutureChannels(rec){
   });
 }
 
+// Resumo de um arquivo de dashboard pra tabela de arquivos: cobertura de GPS válido (%),
+// faixa de altitude, intervalo de tempo coberto, e status dos canais futuros (acima).
 function summarizeDashFile(rec){
   const idx = {
     dt: rec.headers.indexOf('Datalog Time'), date: rec.headers.indexOf('GPS UTC Date'),
@@ -186,6 +203,9 @@ function summarizeDashFile(rec){
   };
 }
 
+// Constrói a timeline de altitude/posição a partir de TODOS os dashboards carregados, unificados
+// e ordenados por tempo absoluto, com suavização por média móvel (janela DASH_SMOOTH_WINDOW).
+// Devolve altAt(t)/gradeAt(t) — interpolação de altitude e cálculo de grade% entre dois instantes.
 function buildDashAltitudeTimeline(){
   if(!dashFiles.length) return null;
   let pts = [];
@@ -238,6 +258,10 @@ function buildDashAltitudeTimeline(){
   return {altAt, gradeAt, coverageStart: smoothed[0].t, coverageEnd: smoothed[smoothed.length-1].t};
 }
 
+// Checagem de qualidade de um arquivo de ECU logo no carregamento (antes de processar de
+// verdade): acusa canal de aceleração/marcha ausente, aceleração "achatada" (variância baixa
+// demais, sinal de canal com defeito) e marcha travada em 1 mesmo com rpm alto (log com
+// problema no sensor/config de marcha). "severe" desabilita o uso do arquivo pra potência.
 function runQC(headers, rows, idxAccel, idxGear, idxRpm){
   const flags = [];
   let severe=false;
@@ -269,9 +293,9 @@ function runQC(headers, rows, idxAccel, idxGear, idxRpm){
   return {flags, severe};
 }
 
-// Cobertura de altitude do GPS por arquivo de ECU, contra os logs de dashboard já carregados.
-// Recalculada sempre que a lista de arquivos ou de dashboards muda. Varre linha a linha (não
-// amostra) porque a coluna de check "100%" precisa ser exata, não aproximada.
+// Limpa do localStorage qualquer chave de formato de armazenamento já superado (ver
+// DEPRECATED_STORAGE_KEYS) — roda sozinho no carregamento da página, sem ação do usuário.
+// Mantenha essa lista atualizada a cada vez que MAPS_STORAGE_KEY subir de versão.
 function cleanupDeprecatedStorage(){
   let freedBytes = 0;
   const removedKeys = [];
@@ -288,12 +312,16 @@ function cleanupDeprecatedStorage(){
   return {removedKeys, freedBytes};
 }
 
+// Lê a lista de sessões de mapas salvos (seção 07) do localStorage. Lista vazia se não houver
+// nada salvo ou se o navegador bloquear/der erro de leitura (nunca lança exceção pra fora).
 function loadSavedMapsList(){
   try{
     const raw = localStorage.getItem(MAPS_STORAGE_KEY);
     return raw ? JSON.parse(raw) : [];
   } catch(e){ return []; }
 }
+// Grava a lista inteira de volta no localStorage. Devolve false (em vez de lançar) se falhar
+// — normalmente por armazenamento cheio ou bloqueado pelo navegador.
 function writeSavedMapsList(list){
   try{ localStorage.setItem(MAPS_STORAGE_KEY, JSON.stringify(list)); return true; } catch(e){ return false; }
 }
@@ -302,12 +330,18 @@ function writeSavedMapsList(list){
 // uma cópia independente desses 4 filtros, sem o fallback de pedal que o processamento principal
 // já tinha (log só com Pedal Position, sem canal de TP, ficava sem filtro nenhum na calibração).
 
+// Valor de carga (TP ou Pedal, o que estiver disponível) — usado tanto pra decidir WOT/carga
+// parcial quanto pra medir estabilidade de aceleração. TP tem prioridade quando os dois existem.
 function resolveLoadValue(rows, i, idxTp, idxPedal){
   const tp = num(rows[i], idxTp);
   const pedal = num(rows[i], idxPedal);
   return !isNaN(tp) ? tp : pedal;
 }
 
+// Exclusão por temperatura do motor (ET): descarta amostra com ET fora da faixa plausível
+// (etMin/etMax) OU com salto brusco de uma amostra pra outra (etMaxDelta, indício de leitura
+// ruim do sensor) — e expande a exclusão por uma janela ao redor (etWindow), já que um sensor
+// instável raramente falha numa amostra isolada.
 function detectEtExclusion(rows, idxEt, params){
   const N = rows.length;
   const etVals = new Array(N);
@@ -389,7 +423,12 @@ function resolveVelocityMs(rpm, gearN, gsKmh, params){
   return v;
 }
 
-// ---------- per-file processing ----------
+// ---------- processamento por arquivo ----------
+// Transforma um arquivo de ECU já carregado (headers+rows brutos do CSV) em duas listas de
+// amostras tratadas — WOT (samples) e carga parcial (samplesPartial) — já com todos os filtros
+// de qualidade aplicados e RPI/AEP/potência/torque calculados por amostra. É o coração do
+// tratamento de dado do projeto: cada filtro abaixo existe por um motivo concreto encontrado
+// em log real (ver comentário de cada um no loop principal, mais adiante nesta função).
 function processFile(rec, params, dashTimeline){
   const headers = rec.headers, rows = rec.rows;
   const idx = {
@@ -462,6 +501,9 @@ function processFile(rec, params, dashTimeline){
   let wotCount=0, etExcludedCount=0, loadCount=0;
   const gAll = 9.80665;
 
+  // Calcula todos os campos derivados de UMA amostra (índice i da linha) já aprovada pelos
+  // filtros do loop principal abaixo: RPI/AEP (eficiência), grade da rampa nesse instante
+  // (se houver dashboard), e potência/torque (se o arquivo tiver canais de aceleração/marcha).
   function computeSample(i, rpm, tp, pedal){
     const cve = num(rows[i], idx.cve);
     const mapv = num(rows[i], idx.map);
@@ -511,47 +553,76 @@ function processFile(rec, params, dashTimeline){
     };
   }
 
+  // Loop principal: cada linha do arquivo passa por uma sequência de filtros independentes,
+  // em ordem. Qualquer filtro que rejeita a linha usa "continue" e pula pro próximo — uma
+  // amostra só chega em computeSample() se passar por TODOS. A ordem abaixo não é por
+  // desempenho, é só a ordem em que os filtros foram adicionados ao projeto; qualquer um pode
+  // ser lido isoladamente sem depender dos outros.
   for(let i=0;i<N;i++){
+    // 1) Temperatura do motor (ET): já pré-computado acima (detectEtExclusion) porque depende
+    // de olhar amostras vizinhas (janela), não só a linha atual.
     if(etExcluded[i]){ etExcludedCount++; continue; }
 
-    // filtro de marcha: descarta 1ª marcha (só aplicável quando o canal existe)
+    // 2) Filtro de marcha: descarta 1ª marcha quando a opção está ligada (só aplicável se o
+    // canal de marcha existir no arquivo). Motivo: 1ª marcha tem poucas amostras WOT (troca
+    // rápida) e maior variância de potência estimada — ver achado de viés de trecho de pista
+    // específico por marcha, documentado na investigação de "potência exagerada em 2ª marcha".
     if(params.gearFilter && idx.gear>=0){
       const gearRaw = num(rows[i], idx.gear);
       if(!isNaN(gearRaw) && Math.round(gearRaw)===1) continue;
     }
 
-    // validade do fix de GPS: descarta GPS Fix Status == 0 (só aplicável quando o canal existe)
+    // 3) Validade do fix de GPS: descarta amostra com GPS Fix Status == 0 (sem posição válida
+    // naquele instante) quando a opção está ligada e o canal existe.
     if(params.gpsFixFilter && idx.gpsFix>=0){
       const fix = num(rows[i], idx.gpsFix);
       if(!isNaN(fix) && fix===0) continue;
     }
 
-    // piso de velocidade mínima do GPS Speed (só aplicável quando o canal existe)
+    // 4) Piso de velocidade mínima do GPS Speed: abaixo disso (ex.: manobra de box, saída de
+    // pista) a leitura de velocidade fica proporcionalmente mais ruidosa e não representa
+    // condução real em avaliação.
     if(idx.gpsSpeed>=0){
       const gs = num(rows[i], idx.gpsSpeed);
       if(!isNaN(gs) && gs < params.speedMinKmh) continue;
     }
 
-    // despique de salto de GPS Speed (glitch de reaquisição não pego pelo GPS Fix Status)
+    // 5) Despique de salto de GPS Speed: um "fix válido" às vezes volta um pouco antes da
+    // solução de velocidade estabilizar de verdade após perda de sinal — gera um salto de
+    // velocidade fisicamente impossível entre amostras consecutivas sem que o GPS Fix Status
+    // (filtro 3) acuse isso sozinho. Pré-computado acima (detectGpsSpeedDespike).
     if(gpsSpeedExcluded[i]) continue;
 
-    // despique de transição de TP (amostra logo após mudança brusca de acelerador)
+    // 6) Despique de transição de TP/Pedal: descarta amostra dentro de uma janela de
+    // instabilidade do acelerador (pé subindo/descendo), mesmo que não seja um degrau único —
+    // pega também transições lentas de várias amostras (lift-e-retomada). Pré-computado acima
+    // (detectTpTransientExclusion).
     if(tpExcluded[i]) continue;
 
+    // 7) Resolve o valor de carga (TP com prioridade, Pedal como alternativa) — usado tanto
+    // pra classificar WOT/carga parcial quanto, mais abaixo, como entrada de computeSample.
     const tp = num(rows[i], idx.tp);
     const pedal = num(rows[i], idx.pedal);
     const loadVal = !isNaN(tp) ? tp : pedal;
 
+    // 8) RPM precisa existir e ser positivo — sem isso não há nem bin de rpm nem cálculo físico
+    // possível.
     const rpm = num(rows[i], idx.rpm);
     if(isNaN(rpm) || rpm<=0) continue;
+    // 9) Precisa ter algum valor de carga válido (TP ou Pedal) pra classificar o regime abaixo.
     if(isNaN(loadVal)) continue;
 
+    // 10) Classificação de regime: WOT (carga ≥ limiar) ou carga parcial (dentro da faixa
+    // configurada, sem entrar em WOT). Fora dessas duas janelas, a amostra não interessa pra
+    // nenhuma das duas comparações (nem WOT nem parcial) e é descartada.
     const isWOT = loadVal >= params.wotThreshold;
     const isPartial = !isWOT && loadVal >= params.loadMin && loadVal <= params.loadMax;
     if(!isWOT && !isPartial) continue;
 
-    // aceleração mínima (limiar diferente por regime) e máxima plausível (ambos os regimes),
-    // convertidas para g independente da unidade do log
+    // 11) Aceleração mínima (limiar diferente por regime — WOT exige mais que carga parcial,
+    // que pode incluir cruzeiro quase estável) e máxima plausível (mesmo limiar pros dois
+    // regimes, corta pico de aceleração fisicamente implausível/glitch). Convertida pra g
+    // independente da unidade configurada do log.
     if(idx.accel>=0){
       let ag = num(rows[i], idx.accel);
       if(!isNaN(ag)){
@@ -562,9 +633,11 @@ function processFile(rec, params, dashTimeline){
       }
     }
 
+    // Passou por todos os filtros — calcula os campos derivados e guarda na lista certa.
     if(isWOT){ wotCount++; out.push(computeSample(i, rpm, tp, pedal)); }
     else { loadCount++; outLoad.push(computeSample(i, rpm, tp, pedal)); }
   }
+
 
   return {
     fileId:rec.id, fileName:rec.name, tag:rec.tag, N,
@@ -578,6 +651,10 @@ function processFile(rec, params, dashTimeline){
   };
 }
 
+// Junta os resultados de processFile de todos os arquivos habilitados num único agregado por
+// mapa (tag): agrupa amostras em byTag, monta a lista de bins de rpm presentes, e chama
+// computeStatFromByTag (calc.js) pra montar a tabela de estatística/escore final.
+// sampleKey escolhe WOT ('samples', padrão) ou carga parcial ('samplesPartial').
 function aggregate(fileResults, params, sampleKey){
   sampleKey = sampleKey || 'samples';
   const byTag = {};
@@ -587,7 +664,7 @@ function aggregate(fileResults, params, sampleKey){
   });
   const tags = Object.keys(byTag);
 
-  // bins present across all
+  // bins de rpm presentes em pelo menos um mapa (união, não interseção)
   const binSet = new Set();
   tags.forEach(t=>byTag[t].forEach(s=>binSet.add(s.bin)));
   const bins = Array.from(binSet).sort((a,b)=>a-b);

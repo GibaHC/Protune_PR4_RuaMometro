@@ -32,6 +32,10 @@ function calcPowerTorqueFromForce(F, v, rpm){
   return { pHP: pW/745.7, torqueNm: (pW/1000)*9549/rpm };
 }
 
+// ---- Sincronização de tempo (GPS -> epoch) e distância geodésica ----
+// Converte data+hora do GPS (formatos DDMMAA / HHMMSS.ss do log) para epoch Unix (segundos).
+// Usado pra alinhar por tempo absoluto os logs de ECU e de dashboard, que rodam em arquivos
+// separados mas compartilham o mesmo relógio GPS.
 function gpsToEpoch(dateVal, timeVal){
   if(isNaN(dateVal) || isNaN(timeVal) || dateVal<=0) return NaN;
   const d = Math.floor(dateVal/10000), mo = Math.floor((dateVal%10000)/100), y = dateVal%100;
@@ -40,6 +44,9 @@ function gpsToEpoch(dateVal, timeVal){
   return Date.UTC(2000+y, mo-1, d, hh, mm, Math.floor(ss), Math.round((ss%1)*1000))/1000;
 }
 
+// Distância em linha reta entre duas coordenadas GPS (fórmula de haversine, superfície esférica
+// da Terra). Usado tanto na correção de rampa (distância percorrida na janela de grade) quanto
+// em qualquer cálculo de curvatura/velocidade a partir de posição.
 function haversineMeters(lat1,lon1,lat2,lon2){
   const R=6371000, toRad=x=>x*Math.PI/180;
   const dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
@@ -66,12 +73,9 @@ function altitudeFromPressureKPa(P_kPa){
   return (T0/L)*(1-Math.pow((P_kPa*1000)/P0, 1/exp));
 }
 
-// Pressão barométrica medida pelo próprio sensor de MAP do carro: com o motor desligado
-// (RPM=0) e chave ligada, o coletor de admissão está exposto à pressão atmosférica ambiente
-// (sem o motor puxando vácuo) — o MAP é, nesse instante, um barômetro. Mais preciso que uma
-// altitude fixa assumida, porque captura a pressão real do dia (clima), não só a altitude.
-// Pega o trecho de RPM=0 contíguo a partir do início do arquivo (pré-partida) e usa a mediana
-// dos últimos ~3s desse trecho (mais perto do instante de partida, robusto a ruído).
+// Pressão de vapor de saturação (Magnus-Tetens) — quanto de vapor d'água o ar consegue reter
+// no máximo naquela temperatura, antes de começar a condensar. Base pra separar a densidade
+// do ar em parcela seca + parcela de vapor, dado um % de umidade relativa.
 function saturationVaporPressureKPa(tC){
   return 0.61094*Math.exp((17.625*tC)/(tC+243.04));
 }
@@ -113,11 +117,13 @@ function rollingMinByTime(times, values, windowSeconds){
   return result;
 }
 
+// Formata epoch (segundos) como data/hora legível em UTC — usado nas tabelas de QC e cobertura.
 function fmtDateTime(epoch){
   if(epoch===null || isNaN(epoch)) return '—';
   return new Date(epoch*1000).toISOString().replace('T',' ').replace('Z','').slice(0,19)+' UTC';
 }
 
+// Formata timestamp ISO (de quando um perfil/mapa foi salvo) em data/hora local pt-BR.
 function fmtSavedAt(iso){
   try{ return new Date(iso).toLocaleString('pt-BR'); } catch(e){ return iso; }
 }
@@ -131,6 +137,9 @@ function fmtSavedAt(iso){
 // "canal do log" — ao recarregar, AEP sempre usa o "Lambda alvo" fixo atual.
 const SNAPSHOT_FIELDS = ['rpm','gear','cve','map','lambda','lambdaTarget','inj','gft','fct','grade','accel','v','rho'];
 
+// Codifica um Float32Array como base64 — formato de armazenamento dos mapas salvos (seção 07),
+// já que localStorage só guarda string. Em blocos de 32KB pra não estourar a pilha de chamada
+// do String.fromCharCode em arrays grandes (milhares de amostras).
 function float32ArrayToBase64(f32){
   const bytes = new Uint8Array(f32.buffer, f32.byteOffset, f32.byteLength);
   let binary = '';
@@ -140,6 +149,7 @@ function float32ArrayToBase64(f32){
   }
   return btoa(binary);
 }
+// Caminho inverso — reconstrói o Float32Array a partir da string base64 salva.
 function base64ToFloat32Array(b64){
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
@@ -147,6 +157,8 @@ function base64ToFloat32Array(b64){
   return new Float32Array(bytes.buffer);
 }
 
+// Empacota um array de amostras num Float32Array plano (linhas x SNAPSHOT_FIELDS), pronto pra
+// virar base64. Ver nota acima do SNAPSHOT_FIELDS sobre por que só o dado bruto é guardado.
 function packSamplesBinary(samples){
   const cols = SNAPSHOT_FIELDS.length;
   const arr = new Float32Array(samples.length*cols);
@@ -198,15 +210,21 @@ function unpackSamplesBinary(packed, currentParams){
 }
 
 
+// Formata bytes como B/KB/MB legível — usado no tamanho de mapas salvos e uso de armazenamento.
 function fmtBytes(n){
   if(n<1024) return n+' B';
   if(n<1024*1024) return (n/1024).toFixed(1)+' KB';
   return (n/(1024*1024)).toFixed(2)+' MB';
 }
 
+// parseFloat seguro por índice de coluna — devolve NaN tanto pra índice inválido (-1, canal
+// ausente no cabeçalho) quanto pra valor vazio/não numérico. Usado em toda leitura de linha
+// de CSV no projeto, pra nunca precisar checar "será que esse canal existe" em cada chamada.
 function num(row, i){ if(i<0) return NaN; const v = parseFloat(row[i]); return v; }
 
 // ---------- aggregation ----------
+// Média simples ignorando NaN — usado como base pra shrinkage/pooling (nunca como binStat, que
+// respeita o método escolhido pelo usuário).
 function mean(arr){ const v=arr.filter(x=>!isNaN(x)); return v.length? v.reduce((a,b)=>a+b,0)/v.length : NaN; }
 
 // Estatística de agregação por bin, configurável: média, mediana, ou média aparada.
@@ -226,11 +244,11 @@ function binStat(arr, params){
   return v.reduce((a,b)=>a+b,0)/v.length;
 }
 
+// Calcula a tabela de estatísticas (n, RPI/AEP, potência, torque, escore) a partir de um
+// byTag já pronto. Separado de aggregate() (data.js) pra poder ser chamado de novo só com um
+// subconjunto de amostras (ex.: filtro de marcha nos gráficos) sem reprocessar os arquivos.
 function computeStatFromByTag(byTag, tags, bins, params){
-  // Calcula a tabela de estatísticas (n, RPI/AEP, potência, torque, escore) a partir de um
-  // byTag já pronto. Separado de aggregate() (data.js) pra poder ser chamado de novo só com um
-  // subconjunto de amostras (ex.: filtro de marcha nos gráficos) sem reprocessar os arquivos.
-  // per tag per bin stats
+  // estatística por mapa por bin
   const stat = {}; // tag -> bin -> {n, rpi, aep, pHP, torqueNm, nPower, lambda, gft, fct, inj}
   tags.forEach(t=>{
     stat[t] = {};
@@ -309,8 +327,13 @@ function applyGearFilterToAgg(agg, selectedGears){
   agg.stat = computeStatFromByTag(filteredByTag, agg.tags, agg.bins, agg._params);
 }
 
+// Formata número com d casas decimais, ou "—" pra NaN/undefined/null — usado em toda tabela
+// de resultado, pra nunca mostrar "NaN" cru na tela.
 function fmt(v, d){ return isNaN(v)||v===undefined||v===null ? '—' : v.toFixed(d===undefined?2:d); }
 
+// Mapa com maior potência medida no bin, entre os que têm confiança >= Média — usado pra
+// destacar o "líder" na tabela/gráfico de potência. Ignora mapas com confiança Baixa mesmo que
+// tenham o maior valor numérico, pra não destacar um pico sustentado por poucas amostras.
 function bestPowerTagInBin(stat, tags, b){
   let best=null, bestVal=-Infinity;
   tags.forEach(t=>{

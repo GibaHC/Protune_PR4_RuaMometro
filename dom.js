@@ -1,3 +1,6 @@
+// Paleta rotativa de cores por mapa (tag): "base" sempre ciano fixo (referência visual
+// constante entre sessões); os demais recebem cor da paleta na ordem em que aparecem pela
+// primeira vez, sem precisar tocar no código pra um teste novo (soma_60, tira_10, etc.).
 const COLOR_PALETTE = ['#ff7a1a','#9d7bff','#ffb35c','#c3a6ff','#4ade80','#f472b6','#60a5fa','#facc15','#fb7185','#34d399'];
 const _colorAssign = {};
 let _colorIdx = 0;
@@ -7,6 +10,9 @@ function colorForTag(tag){
   return _colorAssign[tag];
 }
 
+// Move um mapa uma posição pra cima/baixo na ordem de exibição (botões ▲▼ da seção de ordem).
+// direction: -1 (cima) ou +1 (baixo). Re-renderiza a lista de ordem e, se já houver dado
+// processado, reaplica a ordem nos gráficos/tabelas sem precisar reprocessar os arquivos.
 function moveTag(tag, direction){
   const idx = tagOrder.indexOf(tag);
   if(idx<0) return;
@@ -17,6 +23,7 @@ function moveTag(tag, direction){
   if(aggregated){ applyTagOrder(aggregated); applyTagOrder(aggregatedMid); renderResults(); renderMidResults(); }
 }
 
+// Desenha a lista de mapas com botões ▲▼ de reordenação (seção de ordem de exibição).
 function renderTagOrderUI(){
   const list = currentTagsInOrder();
   const container = document.getElementById('tagOrderList');
@@ -33,7 +40,6 @@ function renderTagOrderUI(){
   });
 }
 
-// ---------- file loading ----------
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
 dropZone.addEventListener('click', ()=>fileInput.click());
@@ -45,6 +51,10 @@ dropZone.addEventListener('drop', e=>{
 });
 fileInput.addEventListener('change', e=>handleFiles(e.target.files));
 
+// ---------- carregamento de arquivo ----------
+// Lê os arquivos soltos/selecionados, um de cada vez: FileReader (leitura) + Papa.parse
+// (parse), cada etapa avançando a barra de progresso da seção 01. Classifica cada arquivo
+// como dashboard ou ECU (isDashFile, em data.js) e direciona pra lista certa (dashFiles/files).
 function handleFiles(fileList){
   const arr = Array.from(fileList).filter(f=>/\.csv$/i.test(f.name));
   if(!arr.length) return;
@@ -126,8 +136,9 @@ function handleFiles(fileList){
   });
 }
 
-// Um log de dashboard tem GPS Altitude mas não tem os canais de VE/VVT da ECU — é assim que
-// diferenciamos automaticamente, sem o usuário precisar marcar nada.
+// Tabela de arquivos de dashboard carregados: cobertura de altitude, faixa de altitude,
+// período coberto, e status dos canais futuros (badge verde=populado, âmbar=presente mas
+// zerado). Botão de remover recalcula a cobertura dos arquivos de ECU sem esse dashboard.
 function renderDashFileTable(){
   const wrap = document.getElementById('dashFileTableWrap');
   const empty = document.getElementById('noDashFiles');
@@ -159,8 +170,9 @@ function renderDashFileTable(){
   });
 }
 
-// Constrói a linha do tempo unificada de altitude a partir de todos os logs de dashboard
-// carregados (concatenados e ordenados por tempo absoluto), com suavização leve.
+// Cobertura de altitude do GPS por arquivo de ECU, contra os logs de dashboard já carregados.
+// Recalculada sempre que a lista de arquivos ou de dashboards muda. Varre linha a linha (não
+// amostra) porque a coluna de check "100%" precisa ser exata, não aproximada.
 function updateAltitudeCoverage(){
   if(!dashFiles.length){
     files.forEach(rec=>{ rec.altCoverage = undefined; });
@@ -183,6 +195,10 @@ function updateAltitudeCoverage(){
   });
 }
 
+// Tabela principal de arquivos de ECU carregados: nome, sessão, mapa (editável), nº de
+// amostras, disponibilidade de canais de potência, cobertura de altitude (se houver dashboard),
+// selos de QC, checkbox de habilitar-pra-potência, e botão de remover. Recalcula cobertura de
+// altitude e a ordem de mapas toda vez que é chamada (arquivo adicionado/removido/reclassificado).
 function renderFileTable(){
   const tbl = document.getElementById('fileTable');
   const body = document.getElementById('fileTableBody');
@@ -273,7 +289,11 @@ function renderFileTable(){
   });
 }
 
-// ---------- params ----------
+// ---------- parâmetros (leitura do formulário da seção 02) ----------
+// Lê TODOS os campos de parâmetro do DOM e devolve um objeto plano — é a "ponte" entre a UI e
+// o resto do projeto: calc.js/data.js nunca leem o DOM diretamente, sempre recebem esse objeto
+// já pronto. Chamado toda vez que os parâmetros precisam ser aplicados (processar, calibrar,
+// salvar perfil).
 function getParams(){
   return {
     mass: parseFloat(document.getElementById('p_mass').value),
@@ -326,6 +346,7 @@ function getParams(){
     shrinkN0: parseFloat(document.getElementById('p_shrink').value),
   };
 }
+// Atualiza o rótulo "X/Y" ao lado do slider de peso do escore composto, em tempo real.
 document.getElementById('p_weight').addEventListener('input', e=>{
   const v = parseInt(e.target.value);
   document.getElementById('wLabel').textContent = v+'/'+(100-v);
@@ -347,11 +368,15 @@ syncTrimPctField();
 // ---------- salvar/carregar/resetar parâmetros (localStorage do navegador) ----------
 const PARAMS_STORAGE_KEY = 'comparador_mapas_injecao_params_v1';
 
+// Todos os elementos de campo de parâmetro (seções 02 e 05), exceto c_tag (que é preenchido
+// em runtime a partir dos mapas carregados, não é um parâmetro salvável do usuário).
 function getParamFields(){
   return Array.from(document.querySelectorAll('[id^="p_"], [id^="c_"]'))
     .filter(el => el.id !== 'c_tag'); // c_tag é populado em runtime a partir dos arquivos, não é um parâmetro salvável
 }
 
+// Salva o valor atual de todos os campos de parâmetro no localStorage, com timestamp.
+// Devolve o payload salvo (útil pra mostrar "salvo às HH:MM") ou null se falhar.
 function saveParamsToStorage(){
   const data = {};
   getParamFields().forEach(el=>{
@@ -366,6 +391,8 @@ function saveParamsToStorage(){
   }
 }
 
+// Aplica um objeto {id: valor} nos campos correspondentes do DOM — usado tanto por
+// "Carregar" quanto pelo carregamento automático ao abrir a página.
 function applyParamsData(data){
   getParamFields().forEach(el=>{
     if(!(el.id in data)) return;
@@ -380,6 +407,8 @@ function applyParamsData(data){
   updateComboEstimate();
 }
 
+// Lê o perfil salvo do localStorage e aplica nos campos. Devolve o payload (com savedAt) ou
+// null se não houver nada salvo ou o dado estiver corrompido.
 function loadParamsFromStorage(){
   let raw;
   try{ raw = localStorage.getItem(PARAMS_STORAGE_KEY); } catch(e){ return null; }
@@ -391,6 +420,9 @@ function loadParamsFromStorage(){
   } catch(e){ return null; }
 }
 
+// Restaura todos os campos ao valor ORIGINAL desta versão da ferramenta (não ao último salvo)
+// — lê .defaultValue/.defaultChecked/option.defaultSelected, que refletem o atributo do HTML,
+// não o que foi alterado em runtime. Por isso funciona mesmo depois de Salvar/Carregar por cima.
 function resetParamsToDefault(){
   getParamFields().forEach(el=>{
     if(el.tagName==='SELECT'){
@@ -409,6 +441,8 @@ function resetParamsToDefault(){
   updateComboEstimate();
 }
 
+// Os três botões da seção 06 — cada um só chama a função já comentada acima e mostra o
+// resultado na mensagem de status.
 document.getElementById('btnSaveParams').addEventListener('click', ()=>{
   const payload = saveParamsToStorage();
   const el = document.getElementById('paramsStorageStatus');
@@ -443,6 +477,9 @@ const DEPRECATED_STORAGE_KEYS = [
   'comparador_mapas_injecao_saved_maps_v2',
 ];
 
+// Empacota todos os mapas atualmente processados (WOT + carga parcial) em binário compacto
+// (packSamplesBinary, calc.js) e grava como uma nova sessão salva no localStorage, com nome
+// dado pelo usuário. Exige nome preenchido e pelo menos um mapa já processado.
 function saveCurrentMapsSnapshot(){
   const nameInput = document.getElementById('mapSnapshotName');
   const name = nameInput.value.trim();
@@ -476,6 +513,11 @@ function saveCurrentMapsSnapshot(){
   renderSavedMapsTable();
 }
 
+// Carrega uma sessão salva e mescla com o que já está processado na tela — nunca substitui.
+// Cada mapa da sessão salva entra com o nome entre colchetes (ex.: "base [antes_troca]"), pra
+// nunca colidir com um mapa de mesmo nome já processado ao vivo. Cria aggregated/aggregatedMid
+// vazios se a página ainda não tiver processado nada (dá pra carregar sessão salva sem nenhum
+// CSV carregado).
 function mergeSnapshotIntoCurrent(id){
   const list = loadSavedMapsList();
   const entry = list.find(e=>e.id===id);
@@ -527,12 +569,15 @@ function mergeSnapshotIntoCurrent(id){
     `mesclado: "${entry.name}" (${entry.tags.length} mapa(s) adicionados como [${entry.name}]) — recalculado com os parâmetros atuais (Cx·A, inércia, bin, correção de rampa etc.), preservando o λ_target por amostra do log original.`;
 }
 
+// Remove uma sessão salva do localStorage (pede confirmação antes, ver botão na tabela).
 function deleteSavedMap(id){
   const list = loadSavedMapsList().filter(e=>e.id!==id);
   writeSavedMapsList(list);
   renderSavedMapsTable();
 }
 
+// Desenha a tabela de sessões salvas (nome, data, mapas incluídos, tamanho) com botões de
+// Carregar/Apagar por linha, e o total de espaço usado no localStorage.
 function renderSavedMapsTable(){
   const list = loadSavedMapsList();
   const table = document.getElementById('savedMapsTable');
@@ -580,7 +625,11 @@ document.getElementById('btnSaveMaps').addEventListener('click', saveCurrentMaps
 
 renderSavedMapsTable();
 
-// ---------- process button ----------
+// ---------- botão processar ----------
+// Lê os parâmetros atuais, reconstrói a timeline de altitude (se houver dashboard), roda
+// processFile em cada arquivo de ECU habilitado, e agrega tudo (WOT + carga parcial) em
+// aggregated/aggregatedMid — substituindo qualquer resultado anterior (mapas mesclados de
+// sessões salvas se perdem aqui; recarregue-os de novo depois de processar, se precisar).
 document.getElementById('btnProcess').addEventListener('click', ()=>{
   if(!files.length) return;
   document.getElementById('statusMsg').textContent = 'processando…';
@@ -607,6 +656,8 @@ document.getElementById('btnProcess').addEventListener('click', ()=>{
   }, 30);
 });
 
+// Limpa todo o estado (arquivos, dashboards, resultados) e volta a tela ao estado inicial —
+// não afeta nada salvo no localStorage (perfis de parâmetro e mapas salvos continuam lá).
 document.getElementById('btnReset').addEventListener('click', ()=>{
   files = []; dashFiles = []; aggregated = null; aggregatedMid = null; tagOrder = [];
   renderFileTable();
@@ -656,6 +707,8 @@ document.querySelectorAll('.tabs').forEach(tabGroup=>{
 // ---------- rendering ----------
 const charts = {}; // chave: 'Score'/'Power' + sufixo ('' para WOT, 'Mid' para carga média)
 
+// Redesenha as 4 abas da seção WOT (escore, potência, lambda, QC) a partir de `aggregated`.
+// Chamada depois de processar, depois de mesclar sessão salva, e pelo filtro de marcha.
 function renderResults(){
   renderGearFilterRow('gearFilterWot', aggregated, ()=>{
     renderScoreTab(aggregated, '');
@@ -668,6 +721,9 @@ function renderResults(){
   renderQCTab(aggregated._fileResults);
 }
 
+// Mesma ideia de renderResults, mas pra seção de carga parcial (sem aba de QC — QC é por
+// arquivo, já mostrado na seção WOT). refAgg (aggregated) é passado pro renderPowerTab pra
+// permitir o alerta cruzado "potência parcial > potência WOT no mesmo bin".
 function renderMidResults(){
   renderGearFilterRow('gearFilterMid', aggregatedMid, ()=>{
     renderScoreTab(aggregatedMid, 'Mid');
@@ -715,8 +771,10 @@ function renderGearFilterRow(containerId, agg, onChange){
   applyGearFilterToAgg(agg, currentSelection());
 }
 
-// tag com melhor potência medida no bin, entre os que têm confiança >= Média — usado para
-// sinalizar divergência entre o proxy de escore (RPI/AEP) e a potência cinemática medida.
+// Aba "Escore composto": gráfico de linha (uma por mapa) + tabela com célula do mapa líder
+// destacada por bin, tooltip com RPI/AEP bruto e contraído, e aviso ⚠ quando o mapa com melhor
+// potência MEDIDA não é o líder de escore (RPI/AEP é só um proxy de eficiência, pode divergir
+// da potência real medida — o aviso existe pra não descartar um mapa bom só pelo escore).
 function renderScoreTab(agg, suffix){
   const {tags, bins, stat} = agg;
   const hideLow = agg._params.hideLowConfidenceInCharts;
@@ -771,6 +829,11 @@ function renderScoreTab(agg, suffix){
   if(legendEl) legendEl.innerHTML = `<span class="leader-swatch"></span>fundo destacado = mapa líder (melhor escore) no bin &nbsp;·&nbsp; <span class="warn-icon">⚠</span> = este mapa tem a melhor potência medida (confiança ≥ Média) no bin, mas o proxy RPI/AEP penalizou o escore — não descarte só pelo escore${hideLow ? ' &nbsp;·&nbsp; célula esmaecida = confiança Baixa, oculta na linha do gráfico' : ''}`;
 }
 
+// Aba "Potência estimada": gráfico de linha + tabela wHP/N·m por bin. Canvas some/aparece
+// (nunca é removido do DOM — ver nota abaixo) conforme há ou não amostra de potência utilizável
+// pra marchas/mapas selecionados no momento. refAgg (quando presente, no caso de carga parcial)
+// habilita o alerta cruzado: potência parcial > WOT no mesmo bin é fisicamente improvável e
+// quase sempre indica contaminação por rampa ou transição não filtrada.
 function renderPowerTab(agg, suffix, refAgg){
   const {tags, bins, stat} = agg;
   const hideLow = agg._params.hideLowConfidenceInCharts;
@@ -858,6 +921,8 @@ function renderPowerTab(agg, suffix, refAgg){
   }
 }
 
+// Aba "Lambda & trim": tabela resumo por mapa (média de lambda, trims de combustível e
+// injection timing, sem separar por bin de rpm — visão geral da calibração de mistura).
 function renderLambdaTab(agg, suffix){
   const {tags, bins} = agg;
   let hLam = '<thead><tr><th>Mapa</th><th>λ médio</th><th>Global Fuel Trim médio</th><th>Fuel Comp Total médio</th><th>Injection Timing médio</th><th>Amostras</th></tr></thead><tbody>';
@@ -874,6 +939,9 @@ function renderLambdaTab(agg, suffix){
   document.getElementById('tableLambda'+suffix).innerHTML = hLam;
 }
 
+// Aba "QC por arquivo": uma linha por arquivo de ECU processado, com contagem de exclusões,
+// pressão pré-partida detectada (e altitude implícita), cobertura de rampa/altitude, status
+// de habilitação de potência, e os alertas de qualidade (runQC, data.js) daquele arquivo.
 function renderQCTab(fileResults){
   let hQC = '<thead><tr><th>Arquivo</th><th>Mapa</th><th>Linhas</th><th>Excluídas p/ ET</th><th>Amostras WOT</th><th>Amostras carga média</th><th>Pressão pré-partida</th><th>Altitude (elegíveis)</th><th>Potência</th><th>Alertas</th></tr></thead><tbody>';
   fileResults.forEach(fr=>{
@@ -897,7 +965,9 @@ function renderQCTab(fileResults){
   document.getElementById('tableQC').innerHTML = hQC;
 }
 
-// ---------- export ----------
+// ---------- exportação ----------
+// Exporta a tabela de estatística completa (todos os bins x todos os mapas, WOT + carga
+// parcial) em CSV plano — uma linha por combinação bin/mapa/regime.
 document.getElementById('btnExportCsv').addEventListener('click', ()=>{
   if(!aggregated) return;
   const header = 'regime,bin_rpm,mapa,n,escore,rpi_bruto,rpi_contraido,aep_bruto,aep_contraido,n_power,potencia_whp,torque_nm,lambda_medio,gft_medio,fct_medio,inj_medio,rampa_pct,confianca,confianca_potencia\n';
@@ -918,6 +988,8 @@ document.getElementById('btnExportCsv').addEventListener('click', ()=>{
   downloadText(csv, 'comparativo_mapas_injecao.csv', 'text/csv');
 });
 
+// Exporta os parâmetros usados, o resumo por arquivo, e a tabela de estatística completa em
+// JSON estruturado — mais fácil de reprocessar programaticamente que o CSV (ex.: num notebook).
 document.getElementById('btnExportJson').addEventListener('click', ()=>{
   if(!aggregated) return;
   const payload = {
@@ -933,6 +1005,8 @@ document.getElementById('btnExportJson').addEventListener('click', ()=>{
   downloadText(JSON.stringify(payload, null, 2), 'comparativo_mapas_injecao.json', 'application/json');
 });
 
+// Dispara o download de um texto como arquivo, via Blob + link temporário (padrão do navegador,
+// sem precisar de servidor) — usado pelos dois exports acima.
 function downloadText(content, filename, mime){
   const blob = new Blob([content], {type:mime});
   const url = URL.createObjectURL(blob);
@@ -941,12 +1015,15 @@ function downloadText(content, filename, mime){
   URL.revokeObjectURL(url);
 }
 
-// ---------- calibration ----------
+// ---------- calibração (seção 05) ----------
+// Popula o seletor de mapa da calibração com os mapas atualmente processados/mesclados.
 function populateCalibTagSelect(){
   const sel = document.getElementById('c_tag');
   sel.innerHTML = aggregated.tags.map(t=>`<option value="${t}">${t}</option>`).join('');
 }
 
+// Mostra ao vivo quantas combinações de Cx·A × inércia a busca em grade vai testar, conforme
+// o usuário ajusta faixa/passo — antes de rodar de verdade, pra dar noção do custo.
 function updateComboEstimate(){
   const cdaMin = parseFloat(document.getElementById('c_cda_min').value);
   const cdaMax = parseFloat(document.getElementById('c_cda_max').value);
@@ -967,6 +1044,12 @@ function updateComboEstimate(){
 });
 updateComboEstimate();
 
+// Roda a busca em grade de Cx·A × inércia: filtra as amostras elegíveis uma vez
+// (getEligibleCalibRows, data.js), depois testa cada combinação da grade contra elas
+// (computeCalibPowerFast, calc.js), comparando a potência/torque estimados nos rpm de
+// referência do dyno contra os valores medidos — mantém a combinação de menor erro combinado.
+// Cede o controle pro navegador a cada ~60ms (requestAnimationFrame) pra não travar a UI numa
+// grade grande.
 document.getElementById('btnCalibrate').addEventListener('click', async ()=>{
   if(!aggregated){ return; }
   const tag = document.getElementById('c_tag').value;
@@ -1077,6 +1160,8 @@ document.getElementById('btnCalibrate').addEventListener('click', async ()=>{
   `;
 });
 
+// Copia o melhor resultado da calibração pros campos de Cx·A/inércia da seção 02 — não
+// reprocessa sozinho, o usuário precisa clicar em "Processar logs" de novo pra aplicar de fato.
 document.getElementById('btnApplyCalib').addEventListener('click', ()=>{
   const b = window._bestCalib;
   if(!b) return;
