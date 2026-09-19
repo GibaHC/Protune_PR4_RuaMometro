@@ -77,6 +77,24 @@ function applyTagOrder(agg){
   agg.tags = ordered;
 }
 
+// Procura, entre os arquivos já carregados (ECU + dashboard), um que pareça ser o mesmo que o
+// candidato (name/size/lastModified vêm direto do objeto File, sem custo de leitura).
+// metaOnly=true (checagem antes de ler o arquivo) só compara metadado; com contentHash
+// disponível (depois da leitura), também confere o hash de conteúdo — pega até arquivo
+// renomeado ou com data de modificação diferente, mas exatamente o mesmo texto.
+function findDuplicateRecord(name, size, lastModified, contentHash, metaOnly){
+  const all = files.concat(dashFiles);
+  for(const rec of all){
+    if(rec.name===name && rec.size===size && rec.lastModified===lastModified){
+      return {rec, matchType:'metadado (nome/tamanho/data)'};
+    }
+    if(!metaOnly && contentHash && rec.contentHash && rec.contentHash===contentHash){
+      return {rec, matchType:'conteúdo idêntico'};
+    }
+  }
+  return null;
+}
+
 // Classifica um arquivo como dashboard (TDL) em vez de ECU: tem canal de altitude do GPS
 // e NÃO tem Corrected VE (canal exclusivo do log de ECU). Dashboards só servem pra enriquecer
 // os arquivos de ECU com altitude/rampa — nunca entram no processamento de potência/mapa.

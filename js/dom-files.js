@@ -82,6 +82,19 @@ function handleFiles(fileList){
   }
 
   arr.forEach(f=>{
+    // Checagem 1 (instantânea, antes de ler): nome+tamanho+data de modificação batendo com
+    // um arquivo já carregado é forte indício de duplicata — pergunta antes de gastar tempo
+    // lendo/parseando um arquivo que talvez nem entre.
+    const preMatch = findDuplicateRecord(f.name, f.size, f.lastModified, null, true);
+    if(preMatch){
+      const ok = confirm(`"${f.name}" parece duplicado de "${preMatch.rec.name}" já carregado (mesmo ${preMatch.matchType}). Carregar mesmo assim?`);
+      if(!ok){
+        tickStep(`pulado (duplicata): ${f.name}`);
+        tickStep(`pulado: ${f.name}`, undefined);
+        return;
+      }
+    }
+
     const reader = new FileReader();
     reader.onload = ev=>{
       // metade 1: leitura do arquivo (bytes -> texto) concluída
@@ -89,13 +102,32 @@ function handleFiles(fileList){
       // setTimeout(0) cede o controle pro navegador repintar a barra antes do parse síncrono
       // (Papa.parse pode travar a thread por um instante em arquivos grandes)
       setTimeout(()=>{
-        const parsed = Papa.parse(ev.target.result, {skipEmptyLines:true});
+        const rawText = ev.target.result;
+        const contentHash = fastStringHash(rawText);
+
+        // Checagem 2 (depois de ler, já que o texto já está em mãos de qualquer forma): pega
+        // duplicata que a checagem 1 não pegou — mesmo conteúdo, nome/data diferentes (arquivo
+        // renomeado ou reexportado). Só pergunta de novo se a checagem 1 não tiver rodado
+        // (preMatch null) — se já confirmou "carregar mesmo assim" lá, não repete a pergunta.
+        if(!preMatch){
+          const postMatch = findDuplicateRecord(f.name, f.size, f.lastModified, contentHash, false);
+          if(postMatch){
+            const ok = confirm(`"${f.name}" tem conteúdo idêntico a "${postMatch.rec.name}" já carregado. Carregar mesmo assim?`);
+            if(!ok){
+              tickStep(`pulado (duplicata): ${f.name}`);
+              return;
+            }
+          }
+        }
+
+        const parsed = Papa.parse(rawText, {skipEmptyLines:true});
         const headers = parsed.data[0];
         const rows = parsed.data.slice(1);
+        const fileMeta = { size: f.size, lastModified: f.lastModified, contentHash };
 
         if(isDashFile(headers)){
           const rec = {
-            id: 'd'+(fileIdSeq++), name:f.name, headers, rows, N: rows.length
+            id: 'd'+(fileIdSeq++), name:f.name, headers, rows, N: rows.length, ...fileMeta
           };
           rec.summary = summarizeDashFile(rec);
           dashFiles.push(rec);
@@ -117,7 +149,7 @@ function handleFiles(fileList){
           id: 'f'+(fileIdSeq++), name:f.name, headers, rows,
           tag: classify(f.name), sessionLabel: sessionLabel(f.name),
           hasPowerChannels, usePower: hasPowerChannels && !qc.severe,
-          qc, N: rows.length
+          qc, N: rows.length, ...fileMeta
         };
         files.push(rec);
         ensureTagInOrder(rec.tag);
@@ -144,7 +176,7 @@ function renderDashFileTable(){
   const empty = document.getElementById('noDashFiles');
   if(!dashFiles.length){ wrap.style.display='none'; empty.style.display='block'; return; }
   wrap.style.display='block'; empty.style.display='none';
-  let h = '<table><thead><tr><th>Arquivo</th><th>Linhas</th><th>Sessões</th><th>Cobertura alt.</th><th>Faixa de altitude</th><th>Período (UTC)</th><th>Canais futuros (leitura, sem uso no cálculo)</th><th></th></tr></thead><tbody>';
+  let h = '<table><thead><tr><th>Arquivo</th><th>Tamanho</th><th>Modificado</th><th>Linhas</th><th>Sessões</th><th>Cobertura alt.</th><th>Faixa de altitude</th><th>Período (UTC)</th><th>Canais futuros (leitura, sem uso no cálculo)</th><th></th></tr></thead><tbody>';
   dashFiles.forEach(rec=>{
     const s = rec.summary;
     const fcBadges = s.futureChannels.map(fc=>{
@@ -153,7 +185,10 @@ function renderDashFileTable(){
       const label = fc.populated ? `${fc.label}: ${fc.n} amostras` : `${fc.label}: aguardando`;
       return `<span class="badge ${cls}" style="margin:1px;" title="${fc.populated?'coluna presente com dado real':'coluna presente no arquivo mas ainda zerada/sem leitura — sensor em instalação'}">${label}</span>`;
     }).join(' ');
-    h += `<tr><td>${rec.name.length>28?rec.name.slice(0,26)+'…':rec.name}</td><td>${rec.N}</td><td>${s.sessionCount}</td>
+    h += `<tr><td title="hash de conteúdo (detecção de duplicata): ${rec.contentHash||'—'}">${rec.name.length>28?rec.name.slice(0,26)+'…':rec.name}</td>
+      <td>${rec.size!==undefined?fmtBytes(rec.size):'—'}</td>
+      <td style="white-space:normal;font-size:11px;">${rec.lastModified?fmtDateTime(rec.lastModified/1000):'—'}</td>
+      <td>${rec.N}</td><td>${s.sessionCount}</td>
       <td>${fmt(s.coveragePct,0)}%</td><td>${fmt(s.altMin,0)}–${fmt(s.altMax,0)} m</td>
       <td style="white-space:normal;font-size:11px;">${fmtDateTime(s.firstT)} → ${fmtDateTime(s.lastT)}</td>
       <td style="white-space:normal;">${fcBadges || '<span style="color:var(--dimmer)">nenhuma coluna reconhecida</span>'}</td>
@@ -253,7 +288,9 @@ function renderFileTable(){
     }
 
     tr.innerHTML = `
-      <td title="${rec.name}">${rec.name.length>28?rec.name.slice(0,26)+'…':rec.name}</td>
+      <td title="${rec.name}${rec.contentHash?' — hash: '+rec.contentHash:''}">${rec.name.length>28?rec.name.slice(0,26)+'…':rec.name}</td>
+      <td>${rec.size!==undefined?fmtBytes(rec.size):'—'}</td>
+      <td style="font-size:11px;">${rec.lastModified?fmtDateTime(rec.lastModified/1000):'—'}</td>
       <td>${rec.sessionLabel}</td>
       <td><input type="text" data-id="${rec.id}" class="tagSelect" list="tagDatalist" value="${rec.tag}" style="width:100px;"></td>
       <td>${rec.N}</td>
