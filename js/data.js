@@ -7,12 +7,38 @@ let aggregated = null; // último resultado de processamento (WOT) — ver aggre
 let aggregatedMid = null; // último resultado de processamento (carga média / parcial)
 let fileIdSeq = 0;
 let tagOrder = []; // ordem de exibição dos mapas nos gráficos/tabelas/legendas, controlada pelo usuário
+let customTagPatterns = []; // nomes de mapa adicionados pelo usuário pra detecção automática (seção 01) — ver classify()
 
-// Classifica um arquivo de ECU num "mapa" (tag) a partir do nome do arquivo: captura padrões
-// soma_NN/tira_NN/calib_NN (presente e futuro, com ou sem underscore/hífen), calib solto,
-// base/vvt, ou cai em "custom" se nada bater. É a base de tudo que agrupa/compara por mapa.
+const CUSTOM_TAGS_STORAGE_KEY = 'comparador_mapas_injecao_custom_tags_v1';
+// Lê a lista de nomes customizados do localStorage. Lista vazia se não houver nada salvo ou
+// se o navegador bloquear/der erro de leitura (nunca lança exceção pra fora).
+function loadCustomTagsFromStorage(){
+  try{
+    const raw = localStorage.getItem(CUSTOM_TAGS_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch(e){ return []; }
+}
+// Grava a lista inteira de volta no localStorage. Devolve false (em vez de lançar) se falhar.
+function writeCustomTagsToStorage(list){
+  try{ localStorage.setItem(CUSTOM_TAGS_STORAGE_KEY, JSON.stringify(list)); return true; } catch(e){ return false; }
+}
+
+// Classifica um arquivo de ECU num "mapa" (tag) a partir do nome do arquivo: primeiro confere
+// os nomes customizados adicionados pelo usuário (seção 01, ordem de inclusão = prioridade),
+// depois os padrões embutidos — soma_NN/tira_NN/calib_NN (presente e futuro, com ou sem
+// underscore/hífen), calib solto, base/vvt — e cai em "custom" se nada bater. É a base de tudo
+// que agrupa/compara por mapa.
 function classify(filename){
   const f = filename.toLowerCase();
+  // Fronteira "não-alfanumérico" (aceita _, -, início/fim como separador) — diferente do
+  // "[^a-z]" usado pelos padrões embutidos abaixo, aqui dígito TAMBÉM conta como parte da
+  // palavra, não como separador. Isso importa porque nome customizado plausivelmente termina
+  // em número (ex.: "avanco_5") e um dígito colado não pode contar como fronteira, senão
+  // "avanco_5" bateria por engano dentro de "avanco_50".
+  for(const pattern of customTagPatterns){
+    const re = new RegExp('(^|[^a-z0-9])'+escapeRegExp(pattern.toLowerCase())+'([^a-z0-9]|$)');
+    if(re.test(f)) return pattern;
+  }
   // captura qualquer padrão "soma_NN" / "tira_NN" / "calib_NN" (com ou sem underscore/hífen), presente e futuro
   const m = f.match(/(soma|tira|calib)[_-]?(\d+)/);
   if(m) return m[1]+'_'+m[2];

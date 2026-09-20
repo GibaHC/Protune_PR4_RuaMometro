@@ -66,6 +66,19 @@
     </div>
 
     <div class="subgrp">
+      <h3>Nomes de mapa customizados (detecção automática)</h3>
+      <div class="note" style="color:var(--dimmer); font-size:11px; margin-bottom:10px;">
+        Além dos padrões já reconhecidos (base, soma_NN, tira_NN, calib_NN), adicione nomes próprios pra detectar automaticamente pelo nome do arquivo, sem precisar corrigir "custom" na tabela depois. Procura o nome como palavra isolada no arquivo (separada por _, -, número, início/fim do nome), sem diferenciar maiúscula/minúscula. Salvo automaticamente no navegador a cada alteração — não depende do botão "Salvar" da seção 06.
+      </div>
+      <div class="row" style="gap:8px;">
+        <input type="text" id="customTagInput" placeholder="ex.: avanco_5" style="max-width:220px;">
+        <button class="btn secondary" id="btnAddCustomTag" style="padding:6px 14px;font-size:12px;">Adicionar</button>
+      </div>
+      <div id="customTagsList" style="margin-top:10px;"></div>
+      <div id="noCustomTags" class="empty" style="font-size:12px;">Nenhum nome customizado adicionado ainda.</div>
+    </div>
+
+    <div class="subgrp">
       <h3>Logs de dashboard (enriquecimento de altitude)</h3>
       <div class="note" style="color:var(--dimmer); font-size:11px; margin-bottom:10px;">
         Arraste junto com os logs de ECU no mesmo dropzone acima — a ferramenta detecta sozinha pelo cabeçalho (tem GPS Altitude, não tem Corrected VE). Não entram no sistema de mapas/tags; servem só para casar por data/hora GPS e trazer altitude/rampa como diagnóstico para as amostras de ECU que caírem dentro do período coberto.

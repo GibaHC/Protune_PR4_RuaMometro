@@ -23,6 +23,12 @@ function fastStringHash(str){
   return (4294967296*(2097151 & h2) + (h1>>>0)).toString(16);
 }
 
+// Escapa caracteres especiais de regex — usado ao transformar um nome de mapa digitado pelo
+// usuário (ex.: "avanco.5") num padrão de busca literal, sem os símbolos virarem metacaracteres.
+function escapeRegExp(str){
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 const GRAVITY_MS2 = 9.80665;
 
 // F_extra = m·g·sen(θ), onde θ vem do grade% medido (Δaltitude/distância). Retorna 0 quando a

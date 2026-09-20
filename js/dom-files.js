@@ -40,6 +40,61 @@ function renderTagOrderUI(){
   });
 }
 
+// ---------- nomes de mapa customizados (detecção automática, seção 01) ----------
+// Desenha a lista de nomes customizados com botão de remover por linha.
+function renderCustomTagsUI(){
+  const container = document.getElementById('customTagsList');
+  const empty = document.getElementById('noCustomTags');
+  empty.style.display = customTagPatterns.length ? 'none' : 'block';
+  container.innerHTML = customTagPatterns.map(p=>`
+    <div class="tagOrderRow">
+      <span class="tagOrderName">${p}</span>
+      <button class="btn secondary removeCustomTagBtn" data-pattern="${p}" style="padding:2px 8px;font-size:11px;">remover</button>
+    </div>`).join('');
+  container.querySelectorAll('.removeCustomTagBtn').forEach(btn=>{
+    btn.addEventListener('click', ()=>{
+      customTagPatterns = customTagPatterns.filter(p=>p!==btn.dataset.pattern);
+      writeCustomTagsToStorage(customTagPatterns);
+      renderCustomTagsUI();
+      // não retroage nos arquivos já classificados com esse nome — só deixa de detectar em
+      // uploads futuros. Reclassificar retroativamente poderia apagar um ajuste manual do
+      // usuário sem aviso.
+    });
+  });
+}
+
+// Adiciona um nome novo (dedupe case-insensitive) e já reclassifica, na hora, os arquivos que
+// ainda estão com o rótulo de fallback "custom" — sem mexer em nenhum arquivo cujo mapa o
+// usuário já tenha corrigido manualmente na tabela (evita sobrescrever escolha explícita).
+document.getElementById('btnAddCustomTag').addEventListener('click', ()=>{
+  const input = document.getElementById('customTagInput');
+  const name = input.value.trim();
+  if(!name) return;
+  if(customTagPatterns.some(p=>p.toLowerCase()===name.toLowerCase())) { input.value=''; return; }
+  customTagPatterns.push(name);
+  writeCustomTagsToStorage(customTagPatterns);
+  input.value = '';
+  renderCustomTagsUI();
+
+  let changed = false;
+  files.forEach(rec=>{
+    if(rec.tag==='custom'){
+      const newTag = classify(rec.name);
+      if(newTag!=='custom'){ rec.tag = newTag; ensureTagInOrder(newTag); changed = true; }
+    }
+  });
+  if(changed) renderFileTable();
+});
+document.getElementById('customTagInput').addEventListener('keydown', e=>{
+  if(e.key==='Enter') document.getElementById('btnAddCustomTag').click();
+});
+
+// carrega os nomes customizados salvos assim que a página abre
+(function loadCustomTagsOnStartup(){
+  customTagPatterns = loadCustomTagsFromStorage();
+  renderCustomTagsUI();
+})();
+
 const dropZone = document.getElementById('dropZone');
 const fileInput = document.getElementById('fileInput');
 dropZone.addEventListener('click', ()=>fileInput.click());
