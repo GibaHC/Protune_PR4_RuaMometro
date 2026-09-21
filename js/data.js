@@ -271,28 +271,44 @@ function summarizeDashFile(rec){
   };
 }
 
-// Constrói a timeline de altitude/posição a partir de TODOS os dashboards carregados, unificados
-// e ordenados por tempo absoluto, com suavização por média móvel (janela DASH_SMOOTH_WINDOW).
-// Devolve altAt(t)/gradeAt(t) — interpolação de altitude e cálculo de grade% entre dois instantes.
-function buildDashAltitudeTimeline(){
-  if(!dashFiles.length) return null;
-  let pts = [];
-  dashFiles.forEach(rec=>{
-    const idx = {
-      dt: rec.headers.indexOf('Datalog Time'), date: rec.headers.indexOf('GPS UTC Date'),
-      time: rec.headers.indexOf('GPS UTC Time'), sats: rec.headers.indexOf('GPS Sats Used'),
-      alt: rec.headers.indexOf('GPS Altitude'), lat: rec.headers.indexOf('GPS Latitude'),
-      lon: rec.headers.indexOf('GPS Longitude')
-    };
-    const {absTime} = buildAbsoluteTimeline(rec.rows, idx.dt, idx.date, idx.time, idx.sats, DASH_MIN_SATS);
-    for(let i=0;i<rec.rows.length;i++){
-      if(isNaN(absTime[i])) continue;
-      const sats = num(rec.rows[i], idx.sats), alt = num(rec.rows[i], idx.alt);
-      if(sats>=DASH_MIN_SATS && alt!==0){
-        pts.push({t:absTime[i], alt, lat:num(rec.rows[i],idx.lat), lon:num(rec.rows[i],idx.lon)});
-      }
+// Extrai pontos {t, alt, lat, lon} de UM registro (arquivo de ECU ou de dashboard) que tenha
+// os canais de GPS Altitude/Latitude/Longitude — usado tanto pelos dashboards de verdade
+// quanto por um arquivo de ECU que já veio enriquecido (mesclagem, seção 01), já que os dois
+// usam exatamente os mesmos nomes de coluna. GPS Sats Used ausente (comum num arquivo de ECU
+// enriquecido, que não tem esse canal nativo) não bloqueia o ponto — trata como sempre confiável,
+// já que quem gravou esses valores ali (enrichRowsWithDash) só grava onde já validou cobertura.
+function extractAltitudePoints(headers, rows){
+  const idx = {
+    dt: headers.indexOf('Datalog Time'), date: headers.indexOf('GPS UTC Date'),
+    time: headers.indexOf('GPS UTC Time'), sats: headers.indexOf('GPS Sats Used'),
+    alt: headers.indexOf('GPS Altitude'), lat: headers.indexOf('GPS Latitude'),
+    lon: headers.indexOf('GPS Longitude')
+  };
+  if(idx.alt<0 || idx.lat<0 || idx.lon<0 || idx.date<0 || idx.time<0) return [];
+  const {absTime} = buildAbsoluteTimeline(rows, idx.dt, idx.date, idx.time, idx.sats, DASH_MIN_SATS);
+  const pts = [];
+  for(let i=0;i<rows.length;i++){
+    if(isNaN(absTime[i])) continue;
+    const sats = idx.sats>=0 ? num(rows[i], idx.sats) : Infinity;
+    const alt = num(rows[i], idx.alt);
+    if(sats>=DASH_MIN_SATS && !isNaN(alt) && alt!==0){
+      pts.push({t:absTime[i], alt, lat:num(rows[i],idx.lat), lon:num(rows[i],idx.lon)});
     }
-  });
+  }
+  return pts;
+}
+
+// Constrói a timeline de altitude/posição a partir de TODOS os dashboards carregados MAIS
+// qualquer arquivo de ECU que já tenha sido enriquecido numa mesclagem anterior (mesmos nomes
+// de coluna GPS Altitude/Latitude/Longitude) — assim um arquivo mesclado+enriquecido alimenta
+// a timeline sozinho, sem precisar recarregar o dashboard original de novo. Pontos de todas as
+// fontes são unificados e ordenados por tempo absoluto, com suavização por média móvel (janela
+// DASH_SMOOTH_WINDOW). Devolve altAt(t)/gradeAt(t) — interpolação de altitude e cálculo de
+// grade% entre dois instantes.
+function buildDashAltitudeTimeline(){
+  let pts = [];
+  dashFiles.forEach(rec=>{ pts = pts.concat(extractAltitudePoints(rec.headers, rec.rows)); });
+  files.forEach(rec=>{ pts = pts.concat(extractAltitudePoints(rec.headers, rec.rows)); });
   if(!pts.length) return null;
   pts.sort((a,b)=>a.t-b.t);
   const W = DASH_SMOOTH_WINDOW;
@@ -330,6 +346,80 @@ function buildDashAltitudeTimeline(){
 // verdade): acusa canal de aceleração/marcha ausente, aceleração "achatada" (variância baixa
 // demais, sinal de canal com defeito) e marcha travada em 1 mesmo com rpm alto (log com
 // problema no sensor/config de marcha). "severe" desabilita o uso do arquivo pra potência.
+// ---------- mesclagem de sessões com enriquecimento de dashboard (seção 01) ----------
+// Acrescenta 3 colunas ao final das linhas de um arquivo de ECU — GPS Altitude/Latitude/
+// Longitude, interpoladas pro timestamp de cada linha a partir do dashboard já carregado
+// (dashTimeline.altAt, a mesma função usada pra correção de rampa em processFile). Usa os
+// MESMOS nomes de coluna que um arquivo de dashboard nativo — não colide com a detecção de
+// isDashFile (que também exige AUSÊNCIA de Corrected VE, presente em todo arquivo de ECU), e
+// significa que o arquivo enriquecido alimenta buildDashAltitudeTimeline sozinho quando
+// recarregado depois, sem precisar re-parear o dashboard original.
+// Linha sem cobertura de dashboard naquele instante fica com as 3 colunas vazias — nunca
+// inventa valor. Não modifica rec — devolve um {headers, rows} novo.
+function enrichRowsWithDash(rec, dashTimeline){
+  const idx = {
+    dt: rec.headers.indexOf('Datalog Time'),
+    date: rec.headers.indexOf('GPS UTC Date'),
+    time: rec.headers.indexOf('GPS UTC Time'),
+    sats: rec.headers.indexOf('GPS Sats Used'),
+  };
+  const newHeaders = rec.headers.concat(['GPS Altitude','GPS Latitude','GPS Longitude']);
+  if(!dashTimeline || idx.date<0 || idx.time<0){
+    // sem dashboard carregado, ou arquivo sem canal de relógio GPS: colunas vazias em toda linha
+    const newRows = rec.rows.map(r=>r.concat(['','','']));
+    return {headers:newHeaders, rows:newRows, coverageN:0, totalN:rec.rows.length};
+  }
+  const {absTime} = buildAbsoluteTimeline(rec.rows, idx.dt, idx.date, idx.time, idx.sats, DASH_MIN_SATS);
+  let coverageN = 0;
+  const newRows = rec.rows.map((r,i)=>{
+    const p = isNaN(absTime[i]) ? null : dashTimeline.altAt(absTime[i]);
+    if(p) coverageN++;
+    return r.concat([p?p.alt:'', p?p.lat:'', p?p.lon:'']);
+  });
+  return {headers:newHeaders, rows:newRows, coverageN, totalN:rec.rows.length};
+}
+
+// Mescla vários conjuntos de {headers, rows} (já enriquecidos, ver enrichRowsWithDash acima)
+// num único CSV — cabeçalho é a união de todas as colunas na ordem de primeira aparição,
+// preenchendo vazio onde um arquivo de origem não tinha aquela coluna (arquivos de sessões
+// diferentes podem ter conjuntos de canal ligeiramente diferentes). Acrescenta uma coluna
+// "Arquivo de Origem" pra rastrear de qual arquivo cada linha veio — útil pra investigar um
+// ponto estranho depois, sem precisar adivinhar a procedência.
+function mergeEnrichedFiles(fileEntries){
+  const unionHeaders = [];
+  const seen = new Set();
+  fileEntries.forEach(fe=>{
+    fe.headers.forEach(h=>{ if(!seen.has(h)){ seen.add(h); unionHeaders.push(h); } });
+  });
+  const finalHeaders = unionHeaders.concat(['Arquivo de Origem']);
+  const mergedRows = [];
+  fileEntries.forEach(fe=>{
+    const colIndex = {};
+    fe.headers.forEach((h,i)=>{ colIndex[h]=i; });
+    fe.rows.forEach(r=>{
+      const row = unionHeaders.map(h => (h in colIndex) ? r[colIndex[h]] : '');
+      row.push(fe.name);
+      mergedRows.push(row);
+    });
+  });
+  return {headers: finalHeaders, rows: mergedRows};
+}
+
+// Serializa {headers, rows} como texto CSV — separador vírgula, campo entre aspas só quando
+// necessário (contém vírgula, aspas ou quebra de linha), aspas internas duplicadas (regra
+// padrão RFC 4180). Usado pra gerar o arquivo de download da mesclagem.
+function toCsvText(headers, rows){
+  function esc(v){
+    if(v===null || v===undefined) return '';
+    const s = String(v);
+    if(/[",\n]/.test(s)) return '"'+s.replace(/"/g,'""')+'"';
+    return s;
+  }
+  const lines = [headers.map(esc).join(',')];
+  rows.forEach(r=>{ lines.push(r.map(esc).join(',')); });
+  return lines.join('\n');
+}
+
 function runQC(headers, rows, idxAccel, idxGear, idxRpm){
   const flags = [];
   let severe=false;

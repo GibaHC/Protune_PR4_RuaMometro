@@ -343,6 +343,7 @@ function renderFileTable(){
     }
 
     tr.innerHTML = `
+      <td><input type="checkbox" data-id="${rec.id}" class="mergeSelectChk" ${rec.selectedForMerge?'checked':''}></td>
       <td title="${rec.name}${rec.contentHash?' — hash: '+rec.contentHash:''}">${rec.name.length>28?rec.name.slice(0,26)+'…':rec.name}</td>
       <td>${rec.size!==undefined?fmtBytes(rec.size):'—'}</td>
       <td style="font-size:11px;">${rec.lastModified?fmtDateTime(rec.lastModified/1000):'—'}</td>
@@ -357,6 +358,15 @@ function renderFileTable(){
     `;
     body.appendChild(tr);
   });
+
+  document.querySelectorAll('.mergeSelectChk').forEach(chk=>{
+    chk.addEventListener('change', e=>{
+      const rec = files.find(x=>x.id===e.target.dataset.id);
+      rec.selectedForMerge = e.target.checked;
+      document.getElementById('btnMergeEnrich').disabled = !files.some(f=>f.selectedForMerge);
+    });
+  });
+  document.getElementById('btnMergeEnrich').disabled = !files.some(f=>f.selectedForMerge);
 
   document.querySelectorAll('.tagSelect').forEach(sel=>{
     sel.addEventListener('change', e=>{
@@ -381,8 +391,35 @@ function renderFileTable(){
   });
 }
 
-// ---------- parâmetros (leitura do formulário da seção 02) ----------
-// Lê TODOS os campos de parâmetro do DOM e devolve um objeto plano — é a "ponte" entre a UI e
-// o resto do projeto: calc.js/data.js nunca leem o DOM diretamente, sempre recebem esse objeto
-// já pronto. Chamado toda vez que os parâmetros precisam ser aplicados (processar, calibrar,
-// salvar perfil).
+// Junta os arquivos de ECU marcados (checkbox "Mesclar") num único CSV bruto, gravando
+// altitude/posição do dashboard já carregado direto nas linhas (enrichRowsWithDash, data.js) —
+// resultado continua sendo dado bruto (filtros/recálculo funcionam normalmente ao reprocessar),
+// mas uma vez recarregado não precisa mais de dashboard pareado (buildDashAltitudeTimeline
+// também escaneia arquivos de ECU com essas colunas, não só dashFiles).
+document.getElementById('btnMergeEnrich').addEventListener('click', ()=>{
+  const selected = files.filter(f=>f.selectedForMerge);
+  const statusEl = document.getElementById('mergeStatus');
+  if(!selected.length){ statusEl.textContent = 'nenhum arquivo marcado pra mesclar'; return; }
+
+  const dashTimeline = buildDashAltitudeTimeline();
+  if(!dashTimeline){
+    statusEl.textContent = 'nenhum dashboard carregado — mesclando sem enriquecimento (colunas de altitude ficam vazias)';
+  }
+
+  let totalCoverage = 0, totalRows = 0;
+  const enrichedEntries = selected.map(rec=>{
+    const {headers, rows, coverageN, totalN} = enrichRowsWithDash(rec, dashTimeline);
+    totalCoverage += coverageN; totalRows += totalN;
+    return {name: rec.name, headers, rows};
+  });
+  const merged = mergeEnrichedFiles(enrichedEntries);
+  const csvText = toCsvText(merged.headers, merged.rows);
+
+  const tags = [...new Set(selected.map(f=>f.tag))];
+  const suggestedName = (tags.length===1 ? tags[0] : 'mesclado') + '_enriquecido.csv';
+  downloadText(csvText, suggestedName, 'text/csv');
+
+  const covPct = totalRows ? (100*totalCoverage/totalRows).toFixed(0) : 0;
+  statusEl.textContent = `mesclado ${selected.length} arquivo(s), ${merged.rows.length} linhas — cobertura de altitude: ${covPct}% (${totalCoverage}/${totalRows})`;
+});
+

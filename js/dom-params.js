@@ -1,3 +1,8 @@
+// ---------- parâmetros (leitura do formulário da seção 02) ----------
+// Lê TODOS os campos de parâmetro do DOM e devolve um objeto plano — é a "ponte" entre a UI e
+// o resto do projeto: calc.js/data.js nunca leem o DOM diretamente, sempre recebem esse objeto
+// já pronto. Chamado toda vez que os parâmetros precisam ser aplicados (processar, calibrar,
+// salvar perfil).
 function getParams(){
   return {
     mass: parseFloat(document.getElementById('p_mass').value),

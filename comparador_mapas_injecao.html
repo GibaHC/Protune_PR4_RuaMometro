@@ -47,7 +47,7 @@
         <div class="tablewrap" style="margin-top:16px;">
           <table class="filetable" id="fileTable" style="display:none;">
             <thead><tr>
-              <th>Arquivo</th><th>Tamanho</th><th>Modificado</th><th>Sessão</th><th>Mapa</th><th>Linhas</th>
+              <th>Mesclar</th><th>Arquivo</th><th>Tamanho</th><th>Modificado</th><th>Sessão</th><th>Mapa</th><th>Linhas</th>
               <th>Canais potência</th><th>Alt. GPS</th><th>Alertas QC</th><th>Usar p/ potência</th><th></th>
             </tr></thead>
             <tbody id="fileTableBody"></tbody>
@@ -55,6 +55,13 @@
         </div>
         <div id="noFiles" class="empty">Nenhum arquivo carregado ainda.</div>
         <div class="note" style="margin-top:8px; color:var(--dimmer); font-size:11px;">A lista é ordenada por data (mais antigo primeiro), extraída do nome do arquivo.</div>
+        <div class="row" style="margin-top:10px;">
+          <button class="btn secondary" id="btnMergeEnrich" disabled>Mesclar + enriquecer selecionados</button>
+          <span class="sub" id="mergeStatus"></span>
+        </div>
+        <div class="note" style="margin-top:6px; color:var(--dimmer); font-size:11px;">
+          Junta os arquivos de ECU marcados na coluna "Mesclar" num único CSV bruto, gravando altitude/posição do dashboard já carregado direto nas linhas (colunas GPS Altitude/Latitude/Longitude). O resultado, uma vez recarregado, não precisa mais de dashboard pareado — alimenta a correção de rampa sozinho. Continua sendo dado bruto: filtros e recálculo funcionam normalmente ao reprocessar.
+        </div>
       </div>
 
       <div class="filelist-side">
