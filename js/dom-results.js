@@ -241,8 +241,12 @@ function renderQCTab(fileResults){
     const powerStatus = fr.hasPowerChannels
       ? (fr.usePower ? '<span class="badge b-ok">habilitada</span>' : '<span class="badge b-warn">desabilitada</span>')
       : '<span class="badge b-bad">sem canais</span>';
+    const validBaros = fr.preCrankSessions ? fr.preCrankSessions.filter(s=>!isNaN(s.baroKPa)) : [];
+    const multiSessionNote = validBaros.length>1
+      ? ` <span class="sub" title="cada sessão do arquivo teve sua própria leitura de pressão pré-partida">(${validBaros.length} sessões, ${fmt(Math.min(...validBaros.map(s=>s.baroKPa))-Math.max(...validBaros.map(s=>s.baroKPa))===0?0:Math.max(...validBaros.map(s=>s.baroKPa))-Math.min(...validBaros.map(s=>s.baroKPa)),1)} kPa de variação)</span>`
+      : '';
     const baro = !isNaN(fr.preCrankBaroKPa)
-      ? `${fmt(fr.preCrankBaroKPa,1)} kPa <span class="sub">(≈${fmt(altitudeFromPressureKPa(fr.preCrankBaroKPa),0)}m)</span>`
+      ? `${fmt(fr.preCrankBaroKPa,1)} kPa <span class="sub">(≈${fmt(altitudeFromPressureKPa(fr.preCrankBaroKPa),0)}m)</span>${multiSessionNote}`
       : '<span class="badge b-warn">não detectada</span>';
     const gc = fr.gradeCoverage;
     const gcPct = gc.total ? 100*gc.n/gc.total : 0;

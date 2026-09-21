@@ -135,6 +135,7 @@ function isDashFile(headers){
 function buildAbsoluteTimeline(rows, idxDT, idxDate, idxTime, idxSats, minSats){
   const N = rows.length;
   const absTime = new Array(N).fill(NaN);
+  const sessionStarts = [];
   let offset = null, sessionCount = 0;
   for(let i=0;i<N;i++){
     const dt = num(rows[i], idxDT);
@@ -142,42 +143,65 @@ function buildAbsoluteTimeline(rows, idxDT, idxDate, idxTime, idxSats, minSats){
     const rawEpoch = gpsToEpoch(num(rows[i],idxDate), num(rows[i],idxTime));
     if(!isNaN(rawEpoch) && (idxSats<0 || sats>=minSats)){
       const candidate = rawEpoch - dt;
-      if(offset===null || Math.abs(candidate-offset) > 3){ offset = candidate; sessionCount++; }
+      if(offset===null || Math.abs(candidate-offset) > 3){ offset = candidate; sessionCount++; sessionStarts.push(i); }
       else offset = offset*0.98 + candidate*0.02;
     }
     if(offset!==null) absTime[i] = dt + offset;
   }
-  return {absTime, sessionCount};
+  return {absTime, sessionCount, sessionStarts};
 }
 
 // Pressão barométrica medida pelo próprio sensor de MAP do carro: com o motor desligado
 // (RPM=0) e chave ligada, o coletor de admissão está exposto à pressão atmosférica ambiente
 // (sem o motor puxando vácuo) — o MAP é, nesse instante, um barômetro. Mais preciso que uma
 // altitude fixa assumida, porque captura a pressão real do dia (clima), não só a altitude.
-// Pega o trecho de RPM=0 contíguo a partir do início do arquivo (pré-partida) e usa a mediana
-// dos últimos ~3s desse trecho (mais perto do instante de partida, robusto a ruído).
-function detectPreCrankBaroKPa(rows, idxRpm, idxMap, idxDt){
-  if(idxRpm<0 || idxMap<0) return NaN;
-  let end = 0;
-  while(end<rows.length){
-    const rpm = num(rows[end], idxRpm);
-    if(isNaN(rpm) || rpm>0) break;
-    end++;
+// Detecta isso pra CADA sessão de gravação dentro do arquivo (sessionStarts, de
+// buildAbsoluteTimeline), não só a primeira — importante pra arquivo com sessões concatenadas
+// (equipamento desligado/religado, ou merge de dias diferentes), onde a pressão atmosférica
+// real pode ser diferente sessão a sessão. Pra cada sessão: pega o bloco de RPM=0 contíguo a
+// partir do início dela e usa a mediana dos últimos ~3s desse trecho (mais perto do instante de
+// partida, robusto a ruído). Devolve um array de {startIdx, baroKPa} — baroKPa é NaN pra uma
+// sessão sem bloco de RPM=0 longo o bastante pra confiar (cai no próximo nível de prioridade
+// pra essas linhas especificamente, ver rhoSample em processFile).
+function detectPreCrankBaroKPa(rows, idxRpm, idxMap, idxDt, sessionStarts){
+  if(idxRpm<0 || idxMap<0) return [];
+  const N = rows.length;
+  const boundaries = (sessionStarts && sessionStarts.length) ? sessionStarts : [0];
+  return boundaries.map((sessionStart, si)=>{
+    const sessionEnd = (si+1<boundaries.length) ? boundaries[si+1] : N;
+    let end = sessionStart;
+    while(end<sessionEnd){
+      const rpm = num(rows[end], idxRpm);
+      if(isNaN(rpm) || rpm>0) break;
+      end++;
+    }
+    if(end-sessionStart < 3) return {startIdx: sessionStart, baroKPa: NaN}; // trecho curto demais pra confiar
+    let start = sessionStart;
+    if(idxDt>=0){
+      const tEnd = num(rows[end-1], idxDt);
+      start = end-1;
+      while(start>sessionStart && (tEnd - num(rows[start-1], idxDt)) <= 3) start--;
+    } else {
+      start = Math.max(sessionStart, end-60);
+    }
+    const vals = [];
+    for(let i=start;i<end;i++){ const v=num(rows[i], idxMap); if(!isNaN(v)) vals.push(v); }
+    if(vals.length<3) return {startIdx: sessionStart, baroKPa: NaN};
+    vals.sort((a,b)=>a-b);
+    return {startIdx: sessionStart, baroKPa: vals[Math.floor(vals.length/2)]};
+  });
+}
+
+// Acha a pressão pré-partida válida pra linha i, olhando pra trás até a última sessão cujo
+// baroKPa foi detectável — assim uma sessão sem leitura própria não fica sem nenhum valor à
+// toa (usa a da sessão anterior mais próxima) em vez de cair direto no fallback de altitude fixa.
+function baroForRow(preCrankSessions, i){
+  let result = NaN;
+  for(const s of preCrankSessions){
+    if(s.startIdx>i) break;
+    if(!isNaN(s.baroKPa)) result = s.baroKPa;
   }
-  if(end<3) return NaN; // trecho curto demais pra confiar
-  let start = 0;
-  if(idxDt>=0){
-    const tEnd = num(rows[end-1], idxDt);
-    start = end-1;
-    while(start>0 && (tEnd - num(rows[start-1], idxDt)) <= 3) start--;
-  } else {
-    start = Math.max(0, end-60);
-  }
-  const vals = [];
-  for(let i=start;i<end;i++){ const v=num(rows[i], idxMap); if(!isNaN(v)) vals.push(v); }
-  if(vals.length<3) return NaN;
-  vals.sort((a,b)=>a-b);
-  return vals[Math.floor(vals.length/2)];
+  return result;
 }
 
 // Parâmetros fixos do enriquecimento por dashboard: quantos satélites mínimos pra confiar num
@@ -499,23 +523,28 @@ function processFile(rec, params, dashTimeline){
   };
   const N = rows.length;
 
-  // Timeline absoluta deste próprio arquivo de ECU, só construída se houver um timeline de
-  // dashboard carregado para casar contra (evita custo à toa quando não há enriquecimento).
-  let ecuAbsTime = null;
-  if(dashTimeline && idx.gpsDate>=0 && idx.gpsTime>=0){
-    ecuAbsTime = buildAbsoluteTimeline(rows, idx.dt, idx.gpsDate, idx.gpsTime, idx.gpsSats, DASH_MIN_SATS).absTime;
+  // Timeline absoluta deste próprio arquivo de ECU: sempre construída (não só quando há
+  // dashboard) porque a detecção de sessão dela alimenta a barometria pré-partida por sessão
+  // logo abaixo, que não depende de dashboard nenhum — só o casamento com altitude do GPS
+  // (ecuAbsTime usado mais adiante) depende de dashTimeline existir.
+  let ecuAbsTime = null, sessionStarts = [0];
+  if(idx.gpsDate>=0 && idx.gpsTime>=0){
+    const tl = buildAbsoluteTimeline(rows, idx.dt, idx.gpsDate, idx.gpsTime, idx.gpsSats, DASH_MIN_SATS);
+    sessionStarts = tl.sessionStarts.length ? tl.sessionStarts : [0];
+    if(dashTimeline) ecuAbsTime = tl.absTime;
   }
 
   // Densidade do ar por amostra: pressão em 3 níveis de prioridade —
   //  1) altitude do GPS (dashboard), quando disponível e habilitado — mais granular, varia
   //     amostra a amostra com o terreno percorrido;
-  //  2) pressão barométrica medida no pré-partida deste próprio arquivo (RPM=0), quando
-  //     detectável — constante para o arquivo inteiro, mas é pressão REAL medida naquele dia,
-  //     não uma altitude assumida;
+  //  2) pressão barométrica medida no pré-partida (RPM=0), por SESSÃO dentro deste arquivo
+  //     (ver detectPreCrankBaroKPa) — constante dentro de uma sessão, mas é pressão REAL
+  //     medida naquele dia específico, não uma altitude assumida; arquivo com sessões de dias
+  //     diferentes (ex.: merge de múltiplas sessões) usa a pressão de cada dia separadamente;
   //  3) altitude fixa do projeto (fallback genérico), via fórmula barométrica padrão.
   // + temperatura do piso de IAT numa janela móvel (evita ler calor retido no cofre do motor
   // como se fosse ambiente). Sem canal de IAT, cai no ρ fixo de fallback da seção 02.
-  const preCrankBaroKPa = detectPreCrankBaroKPa(rows, idx.rpm, idx.map, idx.dt);
+  const preCrankSessions = detectPreCrankBaroKPa(rows, idx.rpm, idx.map, idx.dt, sessionStarts);
   let rhoSample = null;
   if(idx.iat>=0 && idx.dt>=0){
     const dtVals = new Array(N), iatVals = new Array(N);
@@ -524,10 +553,11 @@ function processFile(rec, params, dashTimeline){
     rhoSample = new Array(N);
     for(let i=0;i<N;i++){
       let P_kPa;
+      const preCrankHere = baroForRow(preCrankSessions, i);
       if(params.useGpsAltitude && dashTimeline && ecuAbsTime && !isNaN(ecuAbsTime[i]) && dashTimeline.altAt(ecuAbsTime[i])){
         P_kPa = pressureFromAltitude(dashTimeline.altAt(ecuAbsTime[i]).alt)/1000;
-      } else if(!isNaN(preCrankBaroKPa)){
-        P_kPa = preCrankBaroKPa;
+      } else if(!isNaN(preCrankHere)){
+        P_kPa = preCrankHere;
       } else {
         P_kPa = pressureFromAltitude(params.avgAltitude)/1000;
       }
@@ -683,9 +713,16 @@ function processFile(rec, params, dashTimeline){
   }
 
 
+  // Pra exibição no QC (uma linha por arquivo): a primeira leitura válida entre as sessões
+  // detectadas, mais a lista completa (preCrankSessions) pra quem precisar do detalhe por
+  // sessão — o cálculo de densidade em si já usa a leitura certa de CADA sessão (baroForRow),
+  // isso aqui é só o resumo mostrado na tabela.
+  const firstValidBaro = preCrankSessions.find(s=>!isNaN(s.baroKPa));
+  const preCrankBaroKPa = firstValidBaro ? firstValidBaro.baroKPa : NaN;
+
   return {
     fileId:rec.id, fileName:rec.name, tag:rec.tag, N,
-    wotCount, etExcludedCount, loadCount, preCrankBaroKPa,
+    wotCount, etExcludedCount, loadCount, preCrankBaroKPa, preCrankSessions,
     gradeCoverage: {
       n: out.concat(outLoad).filter(s=>!isNaN(s.grade)).length,
       total: out.length+outLoad.length
