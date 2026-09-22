@@ -260,21 +260,24 @@ function renderDashFileTable(){
   });
 }
 
-// Cobertura de altitude do GPS por arquivo de ECU, contra os logs de dashboard já carregados.
-// Recalculada sempre que a lista de arquivos ou de dashboards muda. Varre linha a linha (não
-// amostra) porque a coluna de check "100%" precisa ser exata, não aproximada.
+// Cobertura de altitude do GPS por arquivo de ECU, contra os dashboards já carregados E
+// qualquer arquivo de ECU que já venha auto-enriquecido (mesclagem, seção 01) — mesma fonte de
+// dado que buildDashAltitudeTimeline usa pra tudo (correção de rampa incluída), então não checa
+// "tem dashFiles?" isoladamente: mesmo com zero dashboard carregado, pode existir timeline
+// válida vinda só de um arquivo já enriquecido. Recalculada sempre que a lista de arquivos ou
+// de dashboards muda.
 function updateAltitudeCoverage(){
-  if(!dashFiles.length){
+  const dashTimeline = buildDashAltitudeTimeline();
+  if(!dashTimeline){
     files.forEach(rec=>{ rec.altCoverage = undefined; });
     return;
   }
-  const dashTimeline = buildDashAltitudeTimeline();
   files.forEach(rec=>{
     const idx = {
       dt: rec.headers.indexOf('Datalog Time'), gpsDate: rec.headers.indexOf('GPS UTC Date'),
       gpsTime: rec.headers.indexOf('GPS UTC Time'), gpsSats: rec.headers.indexOf('GPS Sats Used')
     };
-    if(!dashTimeline || idx.gpsDate<0 || idx.gpsTime<0){ rec.altCoverage = {pct:0, n:0, total:rec.rows.length}; return; }
+    if(idx.gpsDate<0 || idx.gpsTime<0){ rec.altCoverage = {pct:0, n:0, total:rec.rows.length}; return; }
     const absTime = buildAbsoluteTimeline(rec.rows, idx.dt, idx.gpsDate, idx.gpsTime, idx.gpsSats, DASH_MIN_SATS).absTime;
     let covered=0;
     for(let i=0;i<rec.rows.length;i++){
